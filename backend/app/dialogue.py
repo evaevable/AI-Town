@@ -150,6 +150,8 @@ class DialogueEngine:
             "affinity": round(affinity, 1), "affinity_change": delta, "level": level["name"],
             "level_style": level["style"], "emotion": emotion, "importance": importance,
             "memory": memory_text, "episode_id": episode_id,
+            "reason": str(data.get("reason", ""))[:12],
+            "reason": str(data.get("reason", ""))[:12],
             "reply_options": [str(o)[:16] for o in (data.get("reply_options") or [])][:3],
             "actions": actions,
         }

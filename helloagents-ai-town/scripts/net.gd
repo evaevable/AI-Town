@@ -25,8 +25,10 @@ signal chat_end(data: Dictionary)
 signal gift_result(data: Dictionary)
 signal inventory(items: Array)
 signal quests(list: Array)
+signal player_state(data: Dictionary)
 
 var socket := WebSocketPeer.new()
+var _http_player: HTTPRequest
 var _connected := false
 var _retry := 0.0
 var _closed_once := false
@@ -35,7 +37,20 @@ var _http: HTTPRequest
 func _ready() -> void:
 	_http = HTTPRequest.new()
 	add_child(_http)
+	_http_player = HTTPRequest.new()
+	add_child(_http_player)
+	_http_player.request_completed.connect(_on_player_state)
 	_try_connect()
+
+func fetch_player() -> void:
+	_http_player.request(HTTP_BASE + "/api/player")
+
+func _on_player_state(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if code != 200:
+		return
+	var json := JSON.new()
+	if json.parse(body.get_string_from_utf8()) == OK and json.data is Dictionary:
+		player_state.emit(json.data)
 
 func _try_connect() -> void:
 	var err := socket.connect_to_url(WS_URL)

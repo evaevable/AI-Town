@@ -112,8 +112,14 @@ func _build_ui() -> void:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(spacer)
+	var aff_title := Label.new()
+	aff_title.text = "好感度"
+	aff_title.add_theme_font_size_override("font_size", FONT_SMALL)
+	aff_title.add_theme_color_override("font_color", MUTED)
+	aff_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	head.add_child(aff_title)
 	aff_bar = ProgressBar.new()
-	aff_bar.custom_minimum_size = Vector2(260, 18)
+	aff_bar.custom_minimum_size = Vector2(300, 22)
 	aff_bar.max_value = 100
 	aff_bar.show_percentage = false
 	aff_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -283,8 +289,8 @@ func _on_chat_end(data: Dictionary) -> void:
 	body.append_text("\n")
 	aff_bar.value = float(data.get("affinity", 0))
 	var change := float(data.get("affinity_change", 0))
-	var delta_text := ("+%d" % int(change)) if change > 0 else ("%d" % int(change) if change < 0 else "")
-	aff_label.text = "%s  %d/100  %s" % [data.get("level", ""), int(aff_bar.value), delta_text]
+	_set_affinity_text(data.get("level", ""), aff_bar.value, change)
+	_append_change_note(change, data.get("level", ""), int(aff_bar.value), data.get("reason", ""))
 	current.set_emotion(str(data.get("emotion", "")))
 	for opt in data.get("reply_options", []):
 		var b := _mk_button(str(opt), FONT_SMALL, 40)
@@ -324,7 +330,34 @@ func _on_gift_result(data: Dictionary) -> void:
 	var change := float(data.get("affinity_change", 0))
 	aff_label.text = "%s  %d/100  %s" % [data.get("level", ""), int(aff_bar.value),
 		("+%d" % int(change)) if change > 0 else "%d" % int(change)]
+	_set_affinity_text(data.get("level", ""), aff_bar.value, change)
+	_append_change_note(change, data.get("level", ""), int(aff_bar.value), "送礼")
 	current.set_emotion("开心" if data.get("liked") else ("难过" if data.get("disliked") else ""))
+
+func _set_affinity_text(level: String, value: float, change: float) -> void:
+	var delta := ""
+	if change > 0.5:
+		delta = "   +%d ↑" % int(round(change))
+	elif change < -0.5:
+		delta = "   %d ↓" % int(round(change))
+	aff_label.text = "%s  %d/100%s" % [level, int(value), delta]
+	var col := INK
+	if change > 0.5:
+		col = Color(0.72, 0.23, 0.25)      # 涨了：红
+	elif change < -0.5:
+		col = Color(0.20, 0.38, 0.60)      # 掉了：蓝
+	aff_label.add_theme_color_override("font_color", col)
+
+func _append_change_note(change: float, level: String, value: int, why: String) -> void:
+	"""把这一轮的加减直接写进对话记录，一眼能看到。"""
+	if absf(change) < 0.5:
+		body.append_text("[color=#8a8780]　好感度不变（%s %d/100）[/color]\n" % [level, value])
+	elif change > 0:
+		body.append_text("[color=#b5342f]　好感度 +%d ↑　现在 %s %d/100%s[/color]\n" % [
+			int(round(change)), level, value, ("（%s）" % why) if why != "" else ""])
+	else:
+		body.append_text("[color=#2f5f9e]　好感度 %d ↓　现在 %s %d/100%s[/color]\n" % [
+			int(round(change)), level, value, ("（%s）" % why) if why != "" else ""])
 
 func _on_inventory(items: Array) -> void:
 	inventory = items

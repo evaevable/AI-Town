@@ -11,6 +11,8 @@ var clock_label: Label
 var event_label: Label
 var toast_label: Label
 var quest_box: VBoxContainer
+var relation_box: VBoxContainer
+var affinity_cache := {}   # npc_id -> {name, affinity, level}
 var npcs := {}                      # npc_id -> Node
 var _toast_timer := 0.0
 
@@ -27,6 +29,12 @@ func _ready() -> void:
 	Net.world_event.connect(_on_world_event)
 	Net.toast.connect(_on_toast)
 	Net.quests.connect(_on_quests)
+	Net.player_state.connect(_on_player_state)
+	Net.chat_end.connect(_on_chat_end_affinity)
+	Net.gift_result.connect(_on_gift_affinity)
+	Net.player_state.connect(_on_player_state)
+	Net.chat_end.connect(_on_chat_end_affinity)
+	Net.gift_result.connect(_on_gift_affinity)
 	if not Net.is_online():
 		_toast("还没连上后端，请先在 backend 目录运行 python main.py")
 	_toast("用 WASD 走到 NPC 旁边，按 E 跟他说话")
@@ -73,8 +81,20 @@ func _build_hud() -> void:
 	event_label.add_theme_color_override("font_color", Color(0.72, 0.33, 0.09))
 	col.add_child(event_label)
 
+	var rbox := PanelContainer.new()
+	rbox.position = Vector2(16, 108)
+	var rst := StyleBoxFlat.new()
+	rst.bg_color = Color(1, 0.99, 0.96, 0.9)
+	rst.set_corner_radius_all(10)
+	rst.set_content_margin_all(10)
+	rbox.add_theme_stylebox_override("panel", rst)
+	hud.add_child(rbox)
+	relation_box = VBoxContainer.new()
+	relation_box.add_theme_constant_override("separation", 3)
+	rbox.add_child(relation_box)
+
 	var qbox := PanelContainer.new()
-	qbox.position = Vector2(16, 108)
+	qbox.position = Vector2(16, 232)
 	var st2 := StyleBoxFlat.new()
 	st2.bg_color = Color(1, 0.99, 0.96, 0.85)
 	st2.set_corner_radius_all(10)
@@ -139,6 +159,8 @@ func _toast(text: String) -> void:
 # ---------- 生成 NPC ----------
 func _on_welcome(list: Array, clock: Dictionary, event: String) -> void:
 	_spawn_npcs(list)
+	Net.fetch_player()
+	Net.fetch_player()
 	_on_clock(clock)
 	event_label.text = ("正在发生：" + event) if event != "" else ""
 
@@ -211,6 +233,56 @@ func _on_world_event(data: Dictionary) -> void:
 func _on_toast(text: String) -> void:
 	print("[INFO] 提示：", text)
 	_toast(text)
+
+func _on_player_state(data: Dictionary) -> void:
+	for a in data.get("affinities", []):
+		affinity_cache[a.get("npc_id", "")] = {"name": a.get("name", ""),
+			"affinity": float(a.get("affinity", 0)), "level": a.get("level", "")}
+	_render_relations()
+
+func _on_chat_end_affinity(data: Dictionary) -> void:
+	var id := str(data.get("npc_id", ""))
+	if affinity_cache.has(id):
+		affinity_cache[id]["affinity"] = float(data.get("affinity", 0))
+		affinity_cache[id]["level"] = str(data.get("level", ""))
+		_render_relations()
+
+func _on_gift_affinity(data: Dictionary) -> void:
+	_on_chat_end_affinity(data)
+
+func _render_relations() -> void:
+	if relation_box == null:
+		return
+	for c in relation_box.get_children():
+		c.queue_free()
+	var head := Label.new()
+	head.text = "关系"
+	head.add_theme_font_size_override("font_size", 15)
+	head.add_theme_color_override("font_color", Color(0.3, 0.29, 0.27))
+	relation_box.add_child(head)
+	for id in affinity_cache.keys():
+		var info: Dictionary = affinity_cache[id]
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var name_l := Label.new()
+		name_l.text = str(info["name"])
+		name_l.custom_minimum_size = Vector2(56, 0)
+		name_l.add_theme_font_size_override("font_size", 15)
+		name_l.add_theme_color_override("font_color", Color(0.14, 0.14, 0.13))
+		row.add_child(name_l)
+		var bar := ProgressBar.new()
+		bar.max_value = 100
+		bar.value = float(info["affinity"])
+		bar.show_percentage = false
+		bar.custom_minimum_size = Vector2(92, 14)
+		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(bar)
+		var lv := Label.new()
+		lv.text = "%s %d" % [str(info["level"]), int(round(float(info["affinity"])))]
+		lv.add_theme_font_size_override("font_size", 15)
+		lv.add_theme_color_override("font_color", Color(0.42, 0.40, 0.36))
+		row.add_child(lv)
+		relation_box.add_child(row)
 
 func _on_quests(list: Array) -> void:
 	for c in quest_box.get_children():
