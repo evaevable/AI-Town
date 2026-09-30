@@ -32,9 +32,6 @@ func _ready() -> void:
 	Net.player_state.connect(_on_player_state)
 	Net.chat_end.connect(_on_chat_end_affinity)
 	Net.gift_result.connect(_on_gift_affinity)
-	Net.player_state.connect(_on_player_state)
-	Net.chat_end.connect(_on_chat_end_affinity)
-	Net.gift_result.connect(_on_gift_affinity)
 	if not Net.is_online():
 		_toast("还没连上后端，请先在 backend 目录运行 python main.py")
 	_toast("用 WASD 走到 NPC 旁边，按 E 跟他说话")

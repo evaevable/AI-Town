@@ -43,6 +43,8 @@ func _ready() -> void:
 	_try_connect()
 
 func fetch_player() -> void:
+	if _http_player.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		_http_player.cancel_request()   # 上一次还没回来（例如刚好重连），先取消
 	_http_player.request(HTTP_BASE + "/api/player")
 
 func _on_player_state(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
