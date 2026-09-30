@@ -1,90 +1,95 @@
-# 玩家控制脚本
+# 玩家控制：WASD 移动、E 交互，带卡位自救。
 extends CharacterBody2D
 
-# 移动速度
 @export var speed: float = 200.0
 
-# 当前可交互的NPC
 var nearby_npc: Node = null
-
-# 交互状态 (交互时禁用移动)
 var is_interacting: bool = false
 
-# 节点引用
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var camera: Camera2D = $Camera2D
 
-# 音效引用 ⭐ 
-@onready var interact_sound: AudioStreamPlayer = null  # 交互音效
-@onready var running_sound: AudioStreamPlayer = null  # 走路音效
-
-# 走路音效状态 ⭐ 
+@onready var interact_sound: AudioStreamPlayer = null
+@onready var running_sound: AudioStreamPlayer = null
 var is_playing_running_sound: bool = false
 
-func _ready():
-	# 添加到player组 (重要!NPC需要通过这个组来识别玩家)
-	add_to_group("player")
+# 卡位自救
+var _last_pos := Vector2.ZERO
+var _stuck_time := 0.0
+var _nudged := false
 
-	# 获取音效节点 (可选,如果不存在也不会报错) ⭐ 
+func _ready() -> void:
+	add_to_group("player")
 	interact_sound = get_node_or_null("InteractSound")
 	running_sound = get_node_or_null("RunningSound")
-
+	_last_pos = global_position
 	if interact_sound:
 		print("[INFO] 玩家交互音效已启用")
-	else:
-		print("[WARN] 玩家没有InteractSound节点,交互音效已禁用")
-
 	if running_sound:
 		print("[INFO] 玩家走路音效已启用")
-	else:
-		print("[WARN] 玩家没有RunningSound节点,走路音效已禁用")
-
 	Config.log_info("玩家初始化完成")
-	# 启用相机
 	camera.enabled = true
-	# 播放默认动画
 	if animated_sprite.sprite_frames != null and animated_sprite.sprite_frames.has_animation("idle"):
 		animated_sprite.play("idle")
 
-func _physics_process(_delta: float):
-	# 如果正在交互,禁用移动
+func _physics_process(delta: float) -> void:
 	if is_interacting:
 		velocity = Vector2.ZERO
 		move_and_slide()
-		# 播放idle动画
 		if animated_sprite.sprite_frames != null and animated_sprite.sprite_frames.has_animation("idle"):
 			animated_sprite.play("idle")
-		# 停止走路音效 ⭐ 
 		stop_running_sound()
 		return
 
-	# 获取输入方向
-	var input_direction = Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
-
-	# 设置速度
+	var input_direction := Input.get_vector("ui_left", "ui_right", "ui_up", "ui_down")
 	velocity = input_direction * speed
-
-	# 移动
 	move_and_slide()
-
-	# 更新动画和朝向
 	update_animation(input_direction)
-
-	# 更新走路音效 ⭐ 
 	update_running_sound(input_direction)
+	_check_stuck(delta, input_direction)
 
-func update_animation(direction: Vector2):
-	"""更新角色动画 (支持4方向)"""
+func _check_stuck(delta: float, input_direction: Vector2) -> void:
+	"""按着方向键却几乎没动 = 卡住了：先退一点，再不行就挪到最近的路点。"""
+	if input_direction.length() < 0.1:
+		_stuck_time = 0.0
+		_nudged = false
+		_last_pos = global_position
+		return
+	if global_position.distance_to(_last_pos) > 0.8:
+		_stuck_time = 0.0
+		_nudged = false
+	else:
+		_stuck_time += delta
+		if _stuck_time > 1.0 and not _nudged:
+			_nudged = true
+			# 先往反方向退一小步，多数情况这样就能脱身
+			global_position -= input_direction.normalized() * 8.0
+		elif _stuck_time > 2.4:
+			_rescue()
+	_last_pos = global_position
+
+func _rescue() -> void:
+	var best := Vector2.ZERO
+	var best_d := 999999.0
+	for k in WorldMap.POINTS.keys():
+		var p: Vector2 = WorldMap.POINTS[k]
+		var d := global_position.distance_to(p)
+		if d < best_d:
+			best_d = d
+			best = p
+	global_position = best
+	_stuck_time = 0.0
+	_nudged = false
+	_last_pos = global_position
+	print("[INFO] 玩家卡住了，已挪到最近的位置: ", best)
+	get_tree().call_group("main", "show_toast", "这里走不通，我帮你挪了一下")
+
+func update_animation(direction: Vector2) -> void:
 	if animated_sprite.sprite_frames == null:
 		return
-
-	# 根据移动方向播放动画
 	if direction.length() > 0:
-		# 移动中 - 判断主要方向
-		if abs(direction.x) > abs(direction.y):
-			# 左右移动
+		if absf(direction.x) > absf(direction.y):
 			if direction.x > 0:
-				# 向右
 				if animated_sprite.sprite_frames.has_animation("walk_right"):
 					animated_sprite.play("walk_right")
 					animated_sprite.flip_h = false
@@ -92,7 +97,6 @@ func update_animation(direction: Vector2):
 					animated_sprite.play("walk")
 					animated_sprite.flip_h = false
 			else:
-				# 向左
 				if animated_sprite.sprite_frames.has_animation("walk_left"):
 					animated_sprite.play("walk_left")
 					animated_sprite.flip_h = false
@@ -100,96 +104,60 @@ func update_animation(direction: Vector2):
 					animated_sprite.play("walk")
 					animated_sprite.flip_h = true
 		else:
-			# 上下移动
 			if direction.y > 0:
-				# 向下
 				if animated_sprite.sprite_frames.has_animation("walk_down"):
 					animated_sprite.play("walk_down")
 				elif animated_sprite.sprite_frames.has_animation("walk"):
 					animated_sprite.play("walk")
 			else:
-				# 向上
 				if animated_sprite.sprite_frames.has_animation("walk_up"):
 					animated_sprite.play("walk_up")
 				elif animated_sprite.sprite_frames.has_animation("walk"):
 					animated_sprite.play("walk")
 	else:
-		# 静止
 		if animated_sprite.sprite_frames.has_animation("idle"):
 			animated_sprite.play("idle")
 
-func _input(event: InputEvent):
-	# 按E键与NPC交互
-	# 检查E键 (KEY_E = 69)
-	if event is InputEventKey:
-		if event.pressed and not event.echo:
-			# 调试: 打印所有按键
-			print("[DEBUG] 按键: ", event.keycode, " (E=69, Enter=4194309)")
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_E or event.keycode == KEY_ENTER:
+			if nearby_npc != null:
+				interact_with_npc()
 
-			if event.keycode == KEY_E or event.keycode == KEY_ENTER or event.is_action_pressed("ui_accept"):
-				print("[DEBUG] 检测到E键, nearby_npc=", nearby_npc)
-				if nearby_npc != null:
-					interact_with_npc()
-					print("[INFO] E键触发交互")
-				else:
-					print("[WARN] 没有附近的NPC可以交互")
+func interact_with_npc() -> void:
+	if nearby_npc == null:
+		return
+	if interact_sound:
+		interact_sound.play()
+	Config.log_info("与NPC交互: " + nearby_npc.npc_name)
+	get_tree().call_group("dialogue_system", "start_dialogue", nearby_npc.npc_name)
 
-func interact_with_npc():
-	"""与附近的NPC交互"""
-	if nearby_npc != null:
-		# 播放交互音效 ⭐ 
-		if interact_sound:
-			interact_sound.play()
-
-		Config.log_info("与NPC交互: " + nearby_npc.npc_name)
-		# 发送信号给对话系统
-		get_tree().call_group("dialogue_system", "start_dialogue", nearby_npc.npc_name)
-
-func set_nearby_npc(npc: Node):
-	"""设置附近的NPC"""
+func set_nearby_npc(npc: Node) -> void:
 	nearby_npc = npc
 	if npc != null:
 		print("[INFO] ✅ 进入NPC范围: ", npc.npc_name)
-		Config.log_info("进入NPC范围: " + npc.npc_name)
 	else:
 		print("[INFO] ❌ 离开NPC范围")
-		Config.log_info("离开NPC范围")
 
 func get_nearby_npc() -> Node:
-	"""获取附近的NPC"""
 	return nearby_npc
 
-func set_interacting(interacting: bool):
-	"""设置交互状态"""
+func set_interacting(interacting: bool) -> void:
 	is_interacting = interacting
 	if interacting:
-		print("[INFO] 🔒 玩家进入交互状态,移动已禁用")
-		# 停止走路音效 ⭐ 
 		stop_running_sound()
-	else:
-		print("[INFO] 🔓 玩家退出交互状态,移动已启用")
 
-# ⭐ 更新走路音效
-func update_running_sound(direction: Vector2):
-	"""更新走路音效"""
+func update_running_sound(direction: Vector2) -> void:
 	if running_sound == null:
 		return
-
-	# 如果正在移动
 	if direction.length() > 0:
-		# 如果音效还没播放,开始播放
 		if not is_playing_running_sound:
 			running_sound.play()
 			is_playing_running_sound = true
-			print("[INFO] 🎵 开始播放走路音效")
 	else:
-		# 如果停止移动,停止音效
 		stop_running_sound()
 
-# ⭐ 停止走路音效
-func stop_running_sound():
-	"""停止走路音效"""
+func stop_running_sound() -> void:
 	if running_sound and is_playing_running_sound:
 		running_sound.stop()
 		is_playing_running_sound = false
-		print("[INFO] 🔇 停止走路音效")

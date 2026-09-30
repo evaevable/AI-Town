@@ -27,6 +27,8 @@ var _sprite_name := "character_2"
 
 func _ready() -> void:
 	add_to_group("npcs")
+	# 不占碰撞层：NPC 之间、NPC 与玩家互不阻挡（只和墙碰撞），避免把玩家夹住
+	collision_layer = 0
 	_last_pos = global_position
 	if npc_name == "":
 		npc_name = name

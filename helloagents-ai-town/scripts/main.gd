@@ -15,6 +15,7 @@ var npcs := {}                      # npc_id -> Node
 var _toast_timer := 0.0
 
 func _ready() -> void:
+	add_to_group("main")
 	print("[INFO] 主场景初始化")
 	_build_hud()
 	Net.welcome.connect(_on_welcome)
@@ -28,7 +29,9 @@ func _ready() -> void:
 	Net.quests.connect(_on_quests)
 	if not Net.is_online():
 		_toast("还没连上后端，请先在 backend 目录运行 python main.py")
-	if OS.get_environment("AITOWN_AUTOTEST") != "":
+	if OS.get_environment("AITOWN_WALKTEST") != "":
+		_walktest()
+	elif OS.get_environment("AITOWN_AUTOTEST") != "":
 		_autotest()
 
 func _process(delta: float) -> void:
@@ -88,6 +91,9 @@ func _build_hud() -> void:
 	toast_label.add_theme_constant_override("outline_size", 8)
 	toast_label.visible = false
 	hud.add_child(toast_label)
+
+func show_toast(text: String) -> void:
+	_toast(text)
 
 func _toast(text: String) -> void:
 	if text.strip_edges() == "":
@@ -224,3 +230,103 @@ func _autotest() -> void:
 	print("[TEST] 送礼后正文尾=", dialogue.body.get_parsed_text().right(60).replace("\n", " | "))
 	print("[TEST] 全部通过")
 	get_tree().quit(0)
+
+
+# ---------- 走路自检（AITOWN_WALKTEST=1）：自动走到每个房间，检查会不会卡住 ----------
+func _walktest() -> void:
+	for i in 120:
+		await get_tree().process_frame
+	var player: Node2D = get_tree().get_first_node_in_group("player")
+	var start := player.global_position
+	print("[WALK] 起点=", start)
+	var targets := {"茶桌": "茶桌", "客厅": "客厅", "卧室": "卧室", "厨房": "厨房",
+		"沙发区": "沙发区", "电脑桌": "电脑桌", "火锅桌": "火锅桌"}
+	var failed: Array = []
+	for name in targets.keys():
+		var ok: bool = await _walk_route(player, name)
+		print("[WALK] 到 ", name, "（", WorldMap.POINTS[name], "）→ ", "成功" if ok else "失败/卡住",
+			"  用时 %.1f 秒" % _last_walk_time)
+		if not ok:
+			failed.append(name)
+	print("[WALK] 结果：成功 ", targets.size() - failed.size(), "/", targets.size(),
+		"" if failed.is_empty() else "，失败：" + str(failed))
+	get_tree().quit(0 if failed.is_empty() else 2)
+
+var _last_walk_time := 0.0
+
+func _nearest_point_name(pos: Vector2) -> String:
+	var best := "走廊"
+	var best_d := 999999.0
+	for k in WorldMap.POINTS.keys():
+		var d: float = pos.distance_to(WorldMap.POINTS[k])
+		if d < best_d:
+			best_d = d
+			best = str(k)
+	return best
+
+func _walk_route(player: Node2D, target_name: String) -> bool:
+	"""先按路点图算出路线，再一段段走过去（和 NPC 用的是同一张图）。"""
+	var route := WorldMap.path(_nearest_point_name(player.global_position), target_name)
+	var goal: Vector2 = WorldMap.POINTS[target_name]
+	if route.is_empty() or route[route.size() - 1] != goal:
+		route.append(goal)
+	var t_all := Time.get_ticks_msec()
+	for wp in route:
+		if not await _walk_to(player, wp):
+			_last_walk_time = (Time.get_ticks_msec() - t_all) / 1000.0
+			return false
+	_last_walk_time = (Time.get_ticks_msec() - t_all) / 1000.0
+	return true
+
+func _walk_to(player: Node2D, target: Vector2) -> bool:
+	var t0 := Time.get_ticks_msec()
+	var last_d := player.global_position.distance_to(target)
+	var stall := 0.0
+	while Time.get_ticks_msec() - t0 < 15000:
+		var d := player.global_position.distance_to(target)
+		if d < 22.0:
+			_release_all()
+			_last_walk_time = (Time.get_ticks_msec() - t0) / 1000.0
+			return true
+		if last_d - d < 0.2:
+			stall += 1.0 / 60.0
+		else:
+			stall = 0.0
+		if stall > 3.0:   # 三秒没进展就算卡住
+			_release_all()
+			_last_walk_time = (Time.get_ticks_msec() - t0) / 1000.0
+			print("[WALK]   卡在 ", player.global_position)
+			return false
+		last_d = d
+		var dir := (target - player.global_position).normalized()
+		_set_dir(dir)
+		await get_tree().physics_frame
+	_release_all()
+	_last_walk_time = (Time.get_ticks_msec() - t0) / 1000.0
+	return false
+
+func _set_dir(dir: Vector2) -> void:
+	if dir.x > 0.25:
+		if not Input.is_action_pressed("ui_right"):
+			Input.action_press("ui_right")
+	else:
+		Input.action_release("ui_right")
+	if dir.x < -0.25:
+		if not Input.is_action_pressed("ui_left"):
+			Input.action_press("ui_left")
+	else:
+		Input.action_release("ui_left")
+	if dir.y > 0.25:
+		if not Input.is_action_pressed("ui_down"):
+			Input.action_press("ui_down")
+	else:
+		Input.action_release("ui_down")
+	if dir.y < -0.25:
+		if not Input.is_action_pressed("ui_up"):
+			Input.action_press("ui_up")
+	else:
+		Input.action_release("ui_up")
+
+func _release_all() -> void:
+	for a in ["ui_left", "ui_right", "ui_up", "ui_down"]:
+		Input.action_release(a)

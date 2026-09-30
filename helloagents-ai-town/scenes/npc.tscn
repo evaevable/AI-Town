@@ -4,7 +4,7 @@
 [ext_resource type="Texture2D" uid="uid://c4eg1isjbtsp" path="res://assets/characters/character_2.png" id="1_nh2m4"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_abqhh"]
-size = Vector2(37, 58)
+size = Vector2(24, 14)
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_abqhh"]
 atlas = ExtResource("1_nh2m4")
@@ -287,13 +287,13 @@ animations = [{
 }]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_nh2m4"]
-size = Vector2(65, 86)
+size = Vector2(104, 124)
 
 [node name="NPC" type="CharacterBody2D"]
 script = ExtResource("1_abqhh")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(0.5, 1)
+position = Vector2(0, 22)
 shape = SubResource("RectangleShape2D_abqhh")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
@@ -304,7 +304,7 @@ autoplay = "idle"
 [node name="InteractionArea" type="Area2D" parent="."]
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="InteractionArea"]
-position = Vector2(-0.5, 0)
+position = Vector2(0, 0)
 shape = SubResource("RectangleShape2D_nh2m4")
 
 [node name="NameLabel" type="Label" parent="."]
