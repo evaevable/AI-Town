@@ -38,3 +38,13 @@ backend/logs/
 # ============================================================
 .idea/
 .vscode/
+
+# 运行期数据
+backend/data/town.db*
+backend/.pytest_tmp/
+.pytest_tmp/
+
+# 运行期数据
+backend/data/town.db*
+backend/.pytest_tmp/
+.pytest_tmp/

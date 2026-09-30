@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>合租小屋 · 管理台</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--line:#e3e0d8;--ink:#2c2c2a;--muted:#6b6963;--brand:#185fa5;--ok:#3b6d11;--warn:#854f0b;--danger:#a32d2d}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.6 -apple-system,"PingFang SC",sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;align-items:center;gap:16px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+header h1{font-size:15px;font-weight:500;margin:0}
+nav{display:flex;gap:6px}
+nav button{border:1px solid var(--line);background:transparent;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--muted)}
+nav button.on{background:var(--brand);border-color:var(--brand);color:#fff}
+main{padding:20px;max-width:1180px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+input,select,textarea{font:13px/1.5 inherit;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);width:100%}
+textarea{min-height:64px;resize:vertical}
+button.act{background:var(--brand);color:#fff;border:1px solid var(--brand);border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px}
+button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+button.danger{background:#fff;color:var(--danger);border:1px solid #f0c9c9}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:400}
+.muted{color:var(--muted)}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;background:#eef4fb;color:var(--brand);font-size:12px;margin-right:4px}
+.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.npc{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;cursor:pointer}
+.npc.on{border-color:var(--brand);box-shadow:0 0 0 2px #e6f1fb}
+pre{background:#fbfaf7;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:420px;overflow:auto;font-size:12px;white-space:pre-wrap}
+.msg{font-size:13px;padding:6px 10px;border-radius:8px;margin-top:8px;display:none}
+.msg.show{display:block}
+.msg.ok{background:#eaf3de;color:var(--ok)}
+.msg.err{background:#fcebeb;color:var(--danger)}
+h2{font-size:14px;font-weight:500;margin:0 0 10px}
+h3{font-size:13px;font-weight:500;margin:14px 0 6px;color:var(--muted)}
+.sp{flex:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏠 合租小屋 · 管理台</h1>
+  <nav>
+    <button data-tab="npc" class="on">NPC 人设</button>
+    <button data-tab="mem">记忆</button>
+    <button data-tab="dir">导演面板</button>
+    <button data-tab="player">玩家</button>
+  </nav>
+  <div class="sp"></div>
+  <span class="muted" id="llm"></span>
+</header>
+<main>
+  <div id="toast" class="msg"></div>
+  <section id="tab-npc"></section>
+  <section id="tab-mem" hidden></section>
+  <section id="tab-dir" hidden></section>
+  <section id="tab-player" hidden></section>
+</main>
+<script>
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+let META={npcs:[],locations:[],sprites:[],items:[]}, NPC=null, EDIT={};
+const L=[["gender","性别"],["age","年龄"],["title","职业"],["sprite","贴图"],["spawn","出生地点"],
+ ["personality","性格"],["expertise","擅长"],["hobbies","爱好"],["speech_style","说话风格"],
+ ["backstory","背景故事"],["prompt_mode","prompt 模式"],["temperature","随机度 temperature"],
+ ["max_reply_chars","回复字数上限"]];
+const TL=[["catchphrases","口头禅(每行一条)"],["likes","喜欢的礼物(每行一个)"],["dislikes","讨厌的礼物(每行一个)"]];
+function toast(t,ok=true){const e=$('#toast');e.textContent=t;e.className='msg show '+(ok?'ok':'err');setTimeout(()=>e.className='msg',3500)}
+async function api(path,opt={}){const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opt});
+  if(!r.ok){let d='';try{d=(await r.json()).detail}catch(e){};throw new Error(d||r.statusText)};return r.json()}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+$$('nav button').forEach(b=>b.onclick=()=>{
+  $$('nav button').forEach(x=>x.classList.toggle('on',x===b));
+  ['npc','mem','dir','player'].forEach(t=>$('#tab-'+t).hidden=(t!==b.dataset.tab));
+  if(b.dataset.tab==='mem')renderMem();if(b.dataset.tab==='dir')renderDir();if(b.dataset.tab==='player')renderPlayer();
+});
+
+/* ================= 人设 ================= */
+async function loadMeta(){META=await api('/api/npcs');}
+async function renderNpc(){
+  $('#tab-npc').innerHTML=`<div class="card"><h2>NPC 列表（最多 ${META.max} 个）</h2>
+    <div class="g" id="cards"></div>
+    <div class="row" style="margin-top:12px"><button class="ghost" id="add">＋ 新增 NPC</button>
+    <span class="muted">点卡片编辑；改完点保存立即生效，游戏里不用重启</span></div></div>
+    <div id="editor"></div>`;
+  const g=$('#cards');g.innerHTML='';
+  for(const n of META.npcs){
+    const d=document.createElement('div');d.className='npc'+(NPC===n.id?' on':'');
+    d.innerHTML=`<div><b>${esc(n.name)}</b> <span class="muted">${esc(n.title)}</span></div>
+      <div class="muted" style="font-size:12px">${esc(n.location||'')} · ${esc(n.activity||'')} · 心情 ${esc(n.mood||'')}</div>
+      <div><span class="pill">${esc(n.sprite)}</span>${n.behavior.monologue?'':`<span class="pill">独白关</span>`}${n.behavior.wander?'':'<span class="pill">不闲逛</span>'}</div>`;
+    d.onclick=()=>openNpc(n.id);g.appendChild(d);
+  }
+  $('#add').onclick=()=>openNpc(null);
+  if(NPC)renderEditor();
+}
+async function openNpc(id){
+  if(id){const d=await api('/api/npcs/'+id);EDIT=d.npc;}else{EDIT=await blank();}
+  NPC=id;renderNpc();
+}
+async function blank(){return {id:'',name:'',title:'',gender:'',age:20,sprite:'character_2',tint:'#ffffff',spawn:META.locations[0]||'走廊',
+ personality:'',expertise:'',hobbies:'',speech_style:'',catchphrases:[],backstory:'',relationships:{},secrets:[],
+ likes:[],dislikes:[],temperature:.85,max_reply_chars:60,prompt_mode:'template',system_prompt:'',behavior:{wander:true,wander_radius:60,move_speed:60,chattiness:.5,can_chat_with_npcs:true,monologue:true},schedule:[]};}
+function renderEditor(){
+  const n=EDIT, L2=[["id","id(小写英文，不可改)"],...L];
+  $('#editor').innerHTML=`<div class="card"><h2>${n.id?('编辑：'+esc(n.name)):'新增 NPC'}</h2>
+    <div class="row">${L2.map(([k,t])=>`<div style="flex:1 1 180px"><label>${t}</label>
+      <input id="f_${k}" value="${esc(n[k])}" ${k==='id'&&n.id?'readonly':''}></div>`).join('')}</div>
+    <div class="row" style="margin-top:8px">${TL.map(([k,t])=>`<div style="flex:1 1 220px"><label>${t}</label>
+      <textarea id="f_${k}">${esc((n[k]||[]).join('\n'))}</textarea></div>`).join('')}</div>
+    <h3>自定义 system prompt（prompt 模式选 custom 时生效；可用占位符 {name} {mood} {affinity_level} {facts} {reflection} {secrets} {event} {player_name} {roommates} {game_time} {location} {activity}）</h3>
+    <textarea id="f_system_prompt" style="min-height:140px">${esc(n.system_prompt||'')}</textarea>
+    <h3>行为开关</h3>
+    <div class="row">
+      <div style="flex:0 0 auto"><label>闲逛</label><input type="checkbox" id="b_wander" ${n.behavior.wander?'checked':''} style="width:auto"></div>
+      <div style="flex:0 0 auto"><label>生成独白</label><input type="checkbox" id="b_monologue" ${n.behavior.monologue?'checked':''} style="width:auto"></div>
+      <div style="flex:0 0 auto"><label>和 NPC 互聊</label><input type="checkbox" id="b_chat" ${n.behavior.can_chat_with_npcs?'checked':''} style="width:auto"></div>
+      <div style="flex:1 1 140px"><label>主动搭话概率</label><input id="b_chattiness" type="number" step="0.05" min="0" max="1" value="${n.behavior.chattiness}"></div>
+      <div style="flex:1 1 140px"><label>移动速度</label><input id="b_speed" type="number" value="${n.behavior.move_speed}"></div>
+      <div style="flex:1 1 140px"><label>闲逛半径</label><input id="b_radius" type="number" value="${n.behavior.wander_radius}"></div>
+    </div>
+    <h3>日程（按游戏时间）</h3>
+    <table><thead><tr><th>时间</th><th>地点</th><th>活动</th><th></th></tr></thead><tbody id="sched"></tbody></table>
+    <div class="row" style="margin-top:6px"><button class="ghost" onclick="addSched()">＋ 加一行</button></div>
+    <div class="row" style="margin-top:14px">
+      <button class="act" onclick="save()">保存（立即生效）</button>
+      <button class="ghost" onclick="preview()">预览完整 prompt</button>
+      ${n.id?`<button class="ghost danger" onclick="del()">删除这个 NPC</button>`:''}
+      <button class="ghost" onclick="testChat()">试聊一句</button>
+    </div>
+    <div id="pv" style="margin-top:12px"></div></div>`;
+  $$('#sched').forEach(()=>{});
+  const tb=$('#sched');tb.innerHTML='';n.schedule.forEach((s,i)=>tb.appendChild(schedRow(s,i)));
+}
+function schedRow(s,i){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input value="${esc(s.time||'08:00')}" oninput="EDIT.schedule[${i}].time=this.value"></td>
+  <td><select onchange="EDIT.schedule[${i}].location=this.value">${META.locations.map(l=>`<option ${l===s.location?'selected':''}>${l}</option>`).join('')}</select></td>
+  <td><input value="${esc(s.activity||'')}" oninput="EDIT.schedule[${i}].activity=this.value"></td>
+  <td><button class="ghost" onclick="EDIT.schedule.splice(${i},1);renderEditor()">×</button></td>`;
+  return tr;
+}
+function addSched(){EDIT.schedule.push({time:'08:00',location:META.locations[0],activity:''});renderEditor();}
+function collect(){
+  const o={...EDIT};
+  L.forEach(([k])=>{const e=$('#f_'+k);if(e)o[k]=(k==='age'||k==='max_reply_chars')?+e.value:(k==='temperature'?+e.value:e.value)});
+  TL.forEach(([k])=>{o[k]=$('#f_'+k).value.split('\n').map(x=>x.trim()).filter(Boolean)});
+  o.system_prompt=$('#f_system_prompt').value;
+  o.behavior={...o.behavior,wander:$('#b_wander').checked,monologue:$('#b_monologue').checked,
+    can_chat_with_npcs:$('#b_chat').checked,chattiness:+$('#b_chattiness').value,
+    move_speed:+$('#b_speed').value,wander_radius:+$('#b_radius').value};
+  return o;
+}
+async function save(){try{
+  const body=collect();const id=body.id;
+  await api(id?('/api/npcs/'+id):'/api/npcs',{method:id?'PUT':'POST',body:JSON.stringify(body)});
+  toast('已保存，游戏里立刻生效');NPC=id;await loadMeta();renderNpc();
+}catch(e){toast('保存失败：'+e.message,false)}}
+async function del(){if(!confirm('删除 '+EDIT.name+' ？相关记忆可以选择保留'))return;
+  try{await api('/api/npcs/'+EDIT.id+'?purge=true',{method:'DELETE'});NPC=null;await loadMeta();renderNpc();toast('已删除')}
+  catch(e){toast('删除失败：'+e.message,false)}}
+async function preview(){try{const d=await api(`/api/npcs/${EDIT.id}/prompt?message=你好`);
+  $('#pv').innerHTML=`<h3>最终 system prompt</h3><pre>${esc(d.system_prompt)}</pre>`;}catch(e){toast(e.message,false)}}
+async function testChat(){
+  const m=prompt('说一句试试');if(!m)return;
+  try{const d=await api('/api/chat',{method:'POST',body:JSON.stringify({npc_id:EDIT.id,message:m})});
+    $('#pv').innerHTML=`<h3>试聊</h3><pre>${esc(d.text)}\n\n情绪 ${esc(d.emotion)} · 好感度变化 ${d.affinity_change>0?'+':''}${d.affinity_change} → ${d.affinity}\n记忆：${esc(d.memory)}</pre>`;}
+  catch(e){toast('试聊失败：'+e.message,false)}}
+
+/* ================= 记忆 ================= */
+let MEMNPC=null;
+async function renderMem(){
+  $('#tab-mem').innerHTML=`<div class="card"><h2>记忆浏览器</h2><div class="row" id="memtabs"></div><div id="membody"></div></div>`;
+  const t=$('#memtabs');t.innerHTML='';
+  for(const n of META.npcs){const b=document.createElement('button');b.className='ghost';b.textContent=n.name;
+    b.onclick=()=>{MEMNPC=n.id;loadMem()};t.appendChild(b);}
+  MEMNPC=MEMNPC||META.npcs[0]?.id;if(MEMNPC)loadMem();
+}
+async function loadMem(){
+  const d=await api(`/api/npcs/${MEMNPC}/memory`);
+  const s=d.stats;
+  $('#membody').innerHTML=`
+   <div class="row"><span class="pill">好感度 ${d.affinity.toFixed(0)} · ${d.level}</span>
+   <span class="pill">对话 ${s.turns}</span><span class="pill">记忆 ${s.episodes}</span><span class="pill">已归档 ${s.archived}</span>
+   <span class="pill">档案 ${s.facts}</span><span class="pill">反思 ${s.reflections}</span>
+   <div class="sp"></div><button class="ghost danger" onclick="resetMem()">清空这个 NPC 的全部记忆</button></div>
+   <h3>玩家档案（会一直注入 prompt）</h3>
+   <table><tbody>${d.facts.map(f=>`<tr><td>${esc(f.key)}</td><td>${esc(f.value)}</td>
+     <td style="width:60px"><button class="ghost" onclick="delFact('${esc(f.key)}')">删</button></td></tr>`).join('')||'<tr><td class="muted">暂无</td></tr>'}</tbody></table>
+   <div class="row" style="margin-top:8px"><div style="flex:1 1 140px"><label>字段</label><input id="fk" placeholder="爱好"></div>
+     <div style="flex:2 1 220px"><label>内容</label><input id="fv" placeholder="喜欢打游戏"></div>
+     <div><button class="ghost" onclick="addFact()">添加/覆盖</button></div></div>
+   <h3>反思（NPC 对你的整体印象）</h3>
+   ${(d.reflections||[]).map(r=>`<div class="row"><div class="sp">${esc(r.content)}</div>
+     <button class="ghost" onclick="delRef(${r.id})">删</button></div>`).join('')||'<div class="muted">暂无</div>'}
+   <h3>情景记忆 / 八卦（最近的）</h3>
+   <div class="row"><div style="flex:1 1 240px"><label>检索测试（看打分）</label><input id="mq" placeholder="咖啡"></div>
+     <div><button class="ghost" onclick="tryRecall()">检索</button></div></div>
+   <div id="recall"></div>
+   <table><thead><tr><th>#</th><th>类型</th><th>内容</th><th>重要性</th><th>情绪</th><th>来源</th><th></th></tr></thead><tbody>
+   ${d.episodes.map(e=>`<tr><td class="muted">${e.id}</td><td>${esc(e.kind)}</td>
+     <td><input value="${esc(e.content)}" onchange="editEp(${e.id},this.value,${e.importance})"></td>
+     <td>${e.importance}</td><td>${esc(e.emotion)}</td><td class="muted">${esc(e.source)}</td>
+     <td><button class="ghost danger" onclick="delEp(${e.id})">删</button></td></tr>`).join('')}</tbody></table>
+   <h3>最近对话原文</h3><pre>${(d.turns||[]).map(t=>`${t.role==='player'?'玩家':'NPC'}: ${esc(t.content)}`).join('\n')}</pre>`;
+}
+async function addFact(){const k=$('#fk').value,v=$('#fv').value;if(!k||!v)return;
+  await api(`/api/npcs/${MEMNPC}/memory/facts?key=${encodeURIComponent(k)}&value=${encodeURIComponent(v)}`,{method:'POST'});loadMem();}
+async function delFact(k){await api(`/api/npcs/${MEMNPC}/memory/facts/${encodeURIComponent(k)}`,{method:'DELETE'});loadMem();}
+async function delRef(id){await api('/api/memory/reflections/'+id,{method:'DELETE'});loadMem();}
+async function delEp(id){await api('/api/memory/episodes/'+id,{method:'DELETE'});loadMem();}
+async function editEp(id,content,importance){await api('/api/memory/episodes/'+id,{method:'PUT',body:JSON.stringify({content,importance})});toast('已更新')}
+async function resetMem(){if(!confirm('清空这个 NPC 对玩家的全部记忆？'))return;
+  await api(`/api/npcs/${MEMNPC}/memory/reset`,{method:'POST'});loadMem();toast('已清空')}
+async function tryRecall(){const q=$('#mq').value||'你好';
+  const d=await api(`/api/npcs/${MEMNPC}/recall?query=${encodeURIComponent(q)}`);
+  $('#recall').innerHTML=`<table><thead><tr><th>内容</th><th>相关度</th><th>近因</th><th>重要性</th><th>总分</th></tr></thead><tbody>
+   ${d.results.map(r=>`<tr><td>${esc(r.content)}</td><td>${r.relevance??''}</td><td>${r.recency??''}</td><td>${r.importance}</td><td><b>${r.score??''}</b></td></tr>`).join('')}</tbody></table>`;}
+
+/* ================= 导演面板 ================= */
+let W=null,EVENTS=[];
+async function renderDir(){
+  W=await api('/api/world');EVENTS=((await api('/api/world/events')).events)||[];
+  const c=W.clock;
+  $('#tab-dir').innerHTML=`<div class="card"><h2>世界时钟</h2>
+   <div class="row"><span class="pill">${c.date} 第 ${c.day} 天 ${c.time}</span>
+    <span class="pill">${c.paused?'已暂停':'运行中'}</span><span class="pill">${c.speed} 游戏分钟 / 现实秒</span></div>
+   <div class="row" style="margin-top:8px">
+    <div style="flex:0 0 auto"><button class="ghost" onclick="clock({paused:${!c.paused}})">${c.paused?'▶ 继续':'⏸ 暂停'}</button></div>
+    <div style="flex:1 1 120px"><label>跳到时间</label><input id="ctime" value="${c.time}"></div>
+    <div style="flex:1 1 120px"><label>速度</label><input id="cspeed" type="number" step="0.5" value="${c.speed}"></div>
+    <div><button class="ghost" onclick="clock({time:$('#ctime').value,speed:+$('#cspeed').value})">应用</button></div>
+    <div><label>天</label><input id="cday" type="number" value="${c.day}"></div>
+    <div><button class="ghost" onclick="clock({day:+$('#cday').value})">改天(重掷心情)</button></div></div></div>
+
+   <div class="card"><h2>世界事件</h2>
+    <div class="row"><div style="flex:1 1 260px"><label>事件内容</label><input id="evt" placeholder="外面下起了大雨"></div>
+     <div><button class="act" onclick="fireEvent($('#evt').value)">触发</button></div>
+     <div><label>预设</label><select id="evtpre" onchange="$('#evt').value=this.value"><option value="">选一个…</option>
+      ${(W.evpresets||[]).map(e=>`<option>${esc(e)}</option>`).join('')}</select></div>
+     <div><button class="ghost" onclick="fireEvent($('#evtpre').value)">触发预设</button></div></div>
+    <h3>当前生效</h3><div>${W.event?`<span class="pill">${esc(W.event)}</span>`:'<span class="muted">无</span>'}</div>
+    <h3>最近事件</h3><table><tbody>${EVENTS.map(e=>`<tr><td class="muted">${esc(e.game_time)}</td><td>${esc(e.content)}</td></tr>`).join('')}</tbody></table>
+    <div class="row" style="margin-top:8px"><button class="ghost" onclick="forceMono()">立刻生成本轮独白</button>
+     <button class="ghost" onclick="forcePair()">让两个 NPC 聊一段</button></div></div>
+
+   <div class="card"><h2>逐个指挥</h2>
+    <table><thead><tr><th>NPC</th><th>在做什么</th><th>去哪个地点</th><th>活动</th><th>让他说一句</th><th>行为开关</th></tr></thead><tbody>
+   ${W.npcs.map(n=>`<tr><td><b>${esc(n.name)}</b><div class="muted" style="font-size:12px">${esc(n.mood)}</div></td>
+     <td>${esc(n.location)} · ${esc(n.activity)}</td>
+     <td><select id="loc_${n.id}"><option value="">（不变）</option>${META.locations.map(l=>`<option>${l}</option>`).join('')}</select></td>
+     <td><input id="act_${n.id}" placeholder="切菜"></td>
+     <td><input id="say_${n.id}" placeholder="今晚吃咖喱"></td>
+     <td><button class="ghost" onclick="direct('${n.id}')">执行</button>
+       <div style="margin-top:4px"><label><input type="checkbox" style="width:auto" ${n.behavior.wander?'checked':''}
+        onchange="beh('${n.id}','wander',this.checked)"> 闲逛</label>
+       <label><input type="checkbox" style="width:auto" ${n.behavior.monologue?'checked':''}
+        onchange="beh('${n.id}','monologue',this.checked)"> 独白</label>
+       <label><input type="checkbox" style="width:auto" ${n.behavior.can_chat_with_npcs?'checked':''}
+        onchange="beh('${n.id}','can_chat_with_npcs',this.checked)"> 互聊</label></div></td></tr>`).join('')}
+    </tbody></table></div>`;
+
+}
+let W_extra=null;
+async function clock(body){await api('/api/world/clock',{method:'POST',body:JSON.stringify(body)});renderDir();}
+async function fireEvent(content){if(!content)return toast('先写事件内容',false);
+  await api('/api/world/event',{method:'POST',body:JSON.stringify({content})});toast('已触发，NPC 独白会跟着变');renderDir();}
+async function direct(id){const body={npc_id:id,location:$('#loc_'+id).value||null,activity:$('#act_'+id).value||null,say:$('#say_'+id).value||null};
+  await api('/api/world/direct',{method:'POST',body:JSON.stringify(body)});toast('已下达指令');renderDir();}
+async function beh(id,key,val){await api('/api/world/behavior',{method:'POST',body:JSON.stringify({npc_id:id,[key]:val})});toast('已更新行为开关');}
+async function forceMono(){const d=await api('/api/world/monologue',{method:'POST'});toast('独白已生成：'+Object.keys(d.dialogues).length+' 条');}
+async function forcePair(){const ids=W.npcs.map(n=>n.id);
+  if(ids.length<2)return;await api(`/api/world/npc_chat?a=${ids[0]}&b=${ids[1]}`,{method:'POST'});toast('已生成一段互聊');}
+
+/* ================= 玩家 ================= */
+async function renderPlayer(){
+  const d=await api('/api/player');
+  $('#tab-player').innerHTML=`<div class="card"><h2>玩家状态</h2>
+   <h3>好感度</h3><table><tbody>${d.affinities.map(a=>`<tr><td>${esc(a.name)}</td><td>${a.affinity.toFixed(0)} / 100</td><td>${esc(a.level)}</td>
+     <td><input type="range" min="0" max="100" value="${a.affinity}" onchange="setAff('${a.npc_id}',this.value)"></td></tr>`).join('')}</tbody></table>
+   <h3>背包</h3><table><tbody>${d.inventory.map(i=>`<tr><td>${esc(i.item)}</td><td>×${i.count}</td></tr>`).join('')||'<tr><td class="muted">空</td></tr>'}</tbody></table>
+   <h3>进行中的委托</h3><table><tbody>${d.quests.map(q=>`<tr><td>${esc(q.giver)} → ${esc(q.target)}</td><td>${esc(q.content)}</td><td>${esc(q.message)}</td><td>谢礼 ${esc(q.reward_item)}</td></tr>`).join('')||'<tr><td class="muted">无</td></tr>'}</tbody></table>
+   </div>`;
+}
+async function setAff(id,v){await api(`/api/npcs/${id}/affinity?value=${v}`,{method:'PUT'});toast('好感度已设置');}
+
+(async function init(){
+  try{const r=await api('/');$('#llm').textContent=`模型 ${r.llm}${r.mock?'（Mock 模式）':''} · NPC ${r.npcs.join('/')}`;}catch(e){}
+  await loadMeta();renderNpc();
+})();
+</script>
+</body>
+</html>
