@@ -4,16 +4,15 @@ extends RefCounted
 class_name WorldMap
 
 const POINTS := {
-	"卧室": Vector2(200, 165),
+	"卧室": Vector2(1180, 268),
 	"客厅": Vector2(480, 195),
-	"厨房": Vector2(790, 60),
-	"沙发区": Vector2(930, 230),
+	"厨房": Vector2(215, 205),
+	"沙发区": Vector2(965, 238),
 	"电脑桌": Vector2(1000, 470),
 	"茶桌": Vector2(560, 480),
 	"火锅桌": Vector2(280, 420),
 	"走廊": Vector2(650, 480),
 	"_top_mid": Vector2(700, 180),
-	"_door": Vector2(790, 145),
 	"_pass": Vector2(780, 268),
 	"_top_right": Vector2(1100, 250),
 	"_gap": Vector2(1100, 370),
@@ -21,10 +20,9 @@ const POINTS := {
 }
 
 const EDGES := [
-	["卧室", "客厅"],
+	["卧室", "沙发区"],
+	["厨房", "客厅"],
 	["客厅", "_top_mid"],
-	["_top_mid", "_door"],
-	["_door", "厨房"],
 	["_top_mid", "_pass"],
 	["_top_mid", "沙发区"],
 	["沙发区", "_top_right"],

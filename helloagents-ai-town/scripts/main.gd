@@ -248,6 +248,18 @@ func _walktest() -> void:
 			"  用时 %.1f 秒" % _last_walk_time)
 		if not ok:
 			failed.append(name)
+	# 边界检查：站到客厅一直往上顶，看会不会钻到背墙/屋子外面去
+	var before: Vector2 = player.global_position
+	player.global_position = WorldMap.POINTS["客厅"]
+	await get_tree().physics_frame
+	_set_dir(Vector2(0, -1))
+	for i in 240:
+		await get_tree().physics_frame
+	_release_all()
+	var top_y := player.global_position.y
+	print("[WALK] 从客厅往上顶到底 y=", int(top_y), "（脚部碰撞盒上沿=", int(top_y + 18), "，墙沿 y=96）",
+		"  OK 没出屋子" if top_y > 75 else "  ✗ 跑出屋子了")
+	player.global_position = before
 	print("[WALK] 结果：成功 ", targets.size() - failed.size(), "/", targets.size(),
 		"" if failed.is_empty() else "，失败：" + str(failed))
 	get_tree().quit(0 if failed.is_empty() else 2)
