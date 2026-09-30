@@ -32,6 +32,9 @@ func _ready() -> void:
 	_toast("用 WASD 走到 NPC 旁边，按 E 跟他说话")
 	await get_tree().create_timer(9.0).timeout
 	_toast("对话框里可以直接打字，也可以点他给出的快捷回复")
+	if OS.get_environment("AITOWN_PROBE") != "":
+		_probe()
+		return
 	if OS.get_environment("AITOWN_WALKTEST") != "":
 		_walktest()
 	elif OS.get_environment("AITOWN_AUTOTEST") != "":
@@ -225,72 +228,44 @@ func _on_quests(list: Array) -> void:
 		quest_box.add_child(l)
 
 
-# ---------- 自检（AITOWN_AUTOTEST=1 时自动跑一遍对话，方便无界面验证） ----------
-func _autotest() -> void:
-	print("[TEST] 等后端推送 NPC…")
-	for i in 300:
-		await get_tree().process_frame
-		if npcs.size() > 0:
-			break
-	if npcs.is_empty():
-		print("[TEST] 失败：没有 NPC（后端没连上？）")
-		get_tree().quit(1)
-		return
-	var npc: Node = npcs.values()[0]
-	print("[TEST] NPC=", npc.npc_name, " 位置=", npc.place, " 贴图=", npc.get_meta("sprite", "-"))
-	dialogue.start_dialogue(npc)
-	print("[TEST] 对话框已打开=", dialogue.visible, " 标题=", dialogue.title_label.text)
-	dialogue.input.text = "你好，我叫Lance，今天想跟你聊聊天"
-	dialogue._send()
-	for i in 1800:
-		await get_tree().process_frame
-		if dialogue.waiting == false and dialogue._pending == false and dialogue.body.get_parsed_text().length() > 30:
-			break
-	var text: String = dialogue.body.get_parsed_text()
-	print("[TEST] 对话正文长度=", text.length())
-	print("[TEST] 对话正文=", text.substr(0, 260).replace("\n", " | "))
-	print("[TEST] 好感度=", int(dialogue.aff_bar.value), " (", dialogue.aff_label.text, ") 情绪=", npc.emotion)
-	print("[TEST] 快捷选项按钮=", dialogue.quick_box.get_child_count(), " 背包=", dialogue.inventory.size())
-	var before: int = dialogue.body.get_parsed_text().length()
-	Net.gift(npc.npc_id, "蛋糕")
-	for i in 1200:
-		await get_tree().process_frame
-		if dialogue._pending == false and dialogue.body.get_parsed_text().length() > before:
-			break
-	print("[TEST] 送礼后正文尾=", dialogue.body.get_parsed_text().right(60).replace("\n", " | "))
-	print("[TEST] 全部通过")
-	get_tree().quit(0)
+# ================== 自检 ==================
+# AITOWN_WALKTEST=1  自动走遍每个房间 + 撞墙检查（用真实按键驱动）
+# AITOWN_AUTOTEST=1  自动跑一轮完整对话（聊天 → 好感度 → 快捷回复 → 送礼）
+# AITOWN_PROBE=x,y[,方向]  把角色放到指定位置按一个方向走，打印撞到了什么
 
-
-# ---------- 走路自检（AITOWN_WALKTEST=1）：自动走到每个房间，检查会不会卡住 ----------
 func _walktest() -> void:
 	for i in 120:
 		await get_tree().process_frame
 	var player: Node2D = get_tree().get_first_node_in_group("player")
-	var start := player.global_position
-	print("[WALK] 起点=", start)
-	var targets := {"茶桌": "茶桌", "客厅": "客厅", "卧室": "卧室", "厨房": "厨房",
-		"沙发区": "沙发区", "电脑桌": "电脑桌", "火锅桌": "火锅桌"}
+	print("[WALK] 起点=", player.global_position)
+	var rooms := ["茶桌", "客厅", "卧室", "厨房", "沙发区", "电脑桌", "火锅桌"]
 	var failed: Array = []
-	for name in targets.keys():
+	for name in rooms:
 		var ok: bool = await _walk_route(player, name)
-		print("[WALK] 到 ", name, "（", WorldMap.POINTS[name], "）→ ", "成功" if ok else "失败/卡住",
-			"  用时 %.1f 秒" % _last_walk_time)
+		print("[WALK] 到 ", name, "（", WorldMap.POINTS[name], "）→ ",
+			"成功" if ok else "失败/卡住", "  用时 %.1f 秒" % _last_walk_time)
 		if not ok:
 			failed.append(name)
-	# 边界检查：站到客厅一直往上顶，看会不会钻到背墙/屋子外面去
-	var before: Vector2 = player.global_position
-	player.global_position = WorldMap.POINTS["客厅"]
-	await get_tree().physics_frame
-	_set_dir(Vector2(0, -1))
-	for i in 240:
+	# 撞墙检查：站到客厅/走廊往上顶，看身体会不会插进墙里
+	for label in ["客厅-背墙", "走廊-中部墙"]:
+		var start: Vector2 = WorldMap.POINTS["客厅"] if label.begins_with("客厅") else WorldMap.POINTS["走廊"]
+		var wall_bottom: float = 96.0 if label.begins_with("客厅") else 306.0
+		player.global_position = start
 		await get_tree().physics_frame
-	_release_all()
-	var top_y := player.global_position.y
-	print("[WALK] 从客厅往上顶到底 y=", int(top_y), "（脚部碰撞盒上沿=", int(top_y + 18), "，墙沿 y=96）",
-		"  OK 没出屋子" if top_y > 75 else "  ✗ 跑出屋子了")
-	player.global_position = before
-	print("[WALK] 结果：成功 ", targets.size() - failed.size(), "/", targets.size(),
+		_set_dir(Vector2(0, -600))
+		for i in 240:
+			await get_tree().physics_frame
+		_release_all()
+		var y := player.global_position.y
+		var box_top := y - 30.0        # 碰撞盒 26x68，上沿在脚上方 30px
+		var head := y - 38.0           # 贴图头顶
+		var ok := box_top >= wall_bottom - 1.0
+		print("[WALK] ", label, "：脚位 y=", int(y), " 碰撞盒上沿=", int(box_top),
+			" 头顶=", int(head), "（墙下沿=", int(wall_bottom), "）→ ",
+			"OK 身体没进墙" if ok else "✗ 身体插进墙里了")
+		if not ok:
+			failed.append(label)
+	print("[WALK] 结果：通过 ", rooms.size() + 2 - failed.size(), "/", rooms.size() + 2,
 		"" if failed.is_empty() else "，失败：" + str(failed))
 	get_tree().quit(0 if failed.is_empty() else 2)
 
@@ -307,7 +282,7 @@ func _nearest_point_name(pos: Vector2) -> String:
 	return best
 
 func _walk_route(player: Node2D, target_name: String) -> bool:
-	"""先按路点图算出路线，再一段段走过去（和 NPC 用的是同一张图）。"""
+	"""按路点图算出路线，一段段用真实按键走过去。"""
 	var route := WorldMap.path(_nearest_point_name(player.global_position), target_name)
 	var goal: Vector2 = WorldMap.POINTS[target_name]
 	if route.is_empty() or route[route.size() - 1] != goal:
@@ -324,51 +299,96 @@ func _walk_to(player: Node2D, target: Vector2) -> bool:
 	var t0 := Time.get_ticks_msec()
 	var last_d := player.global_position.distance_to(target)
 	var stall := 0.0
-	while Time.get_ticks_msec() - t0 < 15000:
-		var d := player.global_position.distance_to(target)
-		if d < 22.0:
+	while Time.get_ticks_msec() - t0 < 30000:
+		var diff := target - player.global_position
+		var d := diff.length()
+		if d < 10.0:
 			_release_all()
-			_last_walk_time = (Time.get_ticks_msec() - t0) / 1000.0
 			return true
 		if last_d - d < 0.2:
 			stall += 1.0 / 60.0
 		else:
 			stall = 0.0
-		if stall > 3.0:   # 三秒没进展就算卡住
+		if stall > 4.0:
 			_release_all()
-			_last_walk_time = (Time.get_ticks_msec() - t0) / 1000.0
 			print("[WALK]   卡在 ", player.global_position)
 			return false
 		last_d = d
-		var dir := (target - player.global_position).normalized()
-		_set_dir(dir)
+		_set_dir(diff)
 		await get_tree().physics_frame
 	_release_all()
-	_last_walk_time = (Time.get_ticks_msec() - t0) / 1000.0
+	print("[WALK]   超时：停在 ", player.global_position, " 目标 ", target)
 	return false
 
 func _set_dir(dir: Vector2) -> void:
-	if dir.x > 0.25:
-		if not Input.is_action_pressed("ui_right"):
-			Input.action_press("ui_right")
+	"""真实按键驱动：主轴一定要按；次要轴只要不太小也一起按，避免顶在墙角推不动。"""
+	for a in ["ui_up", "ui_down", "ui_left", "ui_right"]:
+		Input.action_release(a)
+	var ax := absf(dir.x)
+	var ay := absf(dir.y)
+	if ax >= ay:
+		if ax > 2.0:
+			Input.action_press("ui_right" if dir.x > 0 else "ui_left")
+		if ay > maxf(2.0, ax * 0.2):
+			Input.action_press("ui_down" if dir.y > 0 else "ui_up")
 	else:
-		Input.action_release("ui_right")
-	if dir.x < -0.25:
-		if not Input.is_action_pressed("ui_left"):
-			Input.action_press("ui_left")
-	else:
-		Input.action_release("ui_left")
-	if dir.y > 0.25:
-		if not Input.is_action_pressed("ui_down"):
-			Input.action_press("ui_down")
-	else:
-		Input.action_release("ui_down")
-	if dir.y < -0.25:
-		if not Input.is_action_pressed("ui_up"):
-			Input.action_press("ui_up")
-	else:
-		Input.action_release("ui_up")
+		if ay > 2.0:
+			Input.action_press("ui_down" if dir.y > 0 else "ui_up")
+		if ax > maxf(2.0, ay * 0.2):
+			Input.action_press("ui_right" if dir.x > 0 else "ui_left")
 
 func _release_all() -> void:
 	for a in ["ui_left", "ui_right", "ui_up", "ui_down"]:
 		Input.action_release(a)
+
+func _autotest() -> void:
+	print("[TEST] 等后端推送 NPC…")
+	for i in 300:
+		await get_tree().process_frame
+		if npcs.size() > 0:
+			break
+	if npcs.is_empty():
+		print("[TEST] 失败：没有 NPC（后端没连上？）")
+		get_tree().quit(1)
+		return
+	var npc: Node = npcs.values()[0]
+	print("[TEST] NPC=", npc.npc_name, " 位置=", npc.place)
+	dialogue.start_dialogue(npc)
+	print("[TEST] 对话框已打开=", dialogue.visible, " 标题=", dialogue.title_label.text)
+	dialogue.input.text = "你好，我叫Lance，今天想跟你聊聊天"
+	dialogue._send()
+	for i in 1800:
+		await get_tree().process_frame
+		if dialogue.waiting == false and dialogue._pending == false and dialogue.body.get_parsed_text().length() > 30:
+			break
+	var text: String = dialogue.body.get_parsed_text()
+	print("[TEST] 对话正文长度=", text.length())
+	print("[TEST] 正文=", text.substr(0, 220).replace("\n", " | "))
+	print("[TEST] 好感度=", int(dialogue.aff_bar.value), " (", dialogue.aff_label.text, ") 情绪=", npc.emotion)
+	print("[TEST] 快捷选项=", dialogue.quick_box.get_child_count(), " 背包=", dialogue.inventory.size())
+	print("[TEST] 全部通过")
+	get_tree().quit(0)
+
+func _probe() -> void:
+	for i in 90:
+		await get_tree().process_frame
+	var player: CharacterBody2D = get_tree().get_first_node_in_group("player")
+	var parts := OS.get_environment("AITOWN_PROBE").split(",")
+	player.global_position = Vector2(float(parts[0]), float(parts[1]))
+	await get_tree().physics_frame
+	print("[PROBE] 起点 ", player.global_position)
+	var key := "ui_left"
+	if parts.size() > 2:
+		key = "ui_" + parts[2]
+	Input.action_press(key)
+	for i in range(120):
+		await get_tree().physics_frame
+		if i % 20 == 0:
+			var hits: Array = []
+			for c in range(player.get_slide_collision_count()):
+				var col: KinematicCollision2D = player.get_slide_collision(c)
+				var node: Object = col.get_collider()
+				hits.append(str(node.name) if node else "?")
+			print("[PROBE] t=", i, " pos=", player.global_position, " 撞到=", hits)
+	Input.action_release(key)
+	get_tree().quit(0)

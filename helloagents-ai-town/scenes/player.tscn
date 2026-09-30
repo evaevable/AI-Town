@@ -319,7 +319,7 @@ animations = [{
 }]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_4r5pv"]
-size = Vector2(26, 16)
+size = Vector2(26, 68)
 
 [node name="Player" type="CharacterBody2D"]
 script = ExtResource("1_g2els")
@@ -330,7 +330,7 @@ animation = &"walk_right"
 autoplay = "idle"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(0, 26)
+position = Vector2(0, 4)
 shape = SubResource("RectangleShape2D_4r5pv")
 
 [node name="Camera2D" type="Camera2D" parent="."]
