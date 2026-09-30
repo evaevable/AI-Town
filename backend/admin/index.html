@@ -113,6 +113,10 @@ function renderEditor(){
       <textarea id="f_${k}">${esc((n[k]||[]).join('\n'))}</textarea></div>`).join('')}</div>
     <h3>自定义 system prompt（prompt 模式选 custom 时生效；可用占位符 {name} {mood} {affinity_level} {facts} {reflection} {secrets} {event} {player_name} {roommates} {game_time} {location} {activity}）</h3>
     <textarea id="f_system_prompt" style="min-height:140px">${esc(n.system_prompt||'')}</textarea>
+    <div class="row" style="margin-top:8px"><div style="flex:0 0 220px"><label>语气档位</label>
+      <select id="f_tone">${["温和","正常","泼辣"].map(t=>`<option ${n.tone===t?'selected':''}>${t}</option>`).join('')}</select></div>
+      <div style="flex:1 1 320px" class="muted" style="font-size:12px;align-self:flex-end">
+        温和＝客气；正常＝会吐槽不爆粗；泼辣＝损友室友，会爆粗口/毒舌/荤玩笑/记仇</div></div>
     <h3>行为开关</h3>
     <div class="row">
       <div style="flex:0 0 auto"><label>闲逛</label><input type="checkbox" id="b_wander" ${n.behavior.wander?'checked':''} style="width:auto"></div>
@@ -149,6 +153,7 @@ function collect(){
   L.forEach(([k])=>{const e=$('#f_'+k);if(e)o[k]=(k==='age'||k==='max_reply_chars')?+e.value:(k==='temperature'?+e.value:e.value)});
   TL.forEach(([k])=>{o[k]=$('#f_'+k).value.split('\n').map(x=>x.trim()).filter(Boolean)});
   o.system_prompt=$('#f_system_prompt').value;
+  o.tone=$('#f_tone').value;
   o.behavior={...o.behavior,wander:$('#b_wander').checked,monologue:$('#b_monologue').checked,
     can_chat_with_npcs:$('#b_chat').checked,chattiness:+$('#b_chattiness').value,
     move_speed:+$('#b_speed').value,wander_radius:+$('#b_radius').value};

@@ -4,6 +4,30 @@ from typing import Any, Dict, List, Optional
 
 from .memory import MemoryStore
 
+TONE_STYLES = {
+    "温和": "说话客气得体，不骂人、不低俗、不阴阳怪气，冲突时也保持礼貌。",
+    "正常": "可以有情绪、会吐槽、会夸张抱怨，但不主动爆粗口，被冒犯时也只冷淡或反问。",
+    "泼辣": (
+        "像现实里的损友室友：可以爆粗口（卧槽／滚／神经病／有病吧之类）、可以毒舌互怼、"
+        "可以阴阳怪气、可以讲含蓄的成人向玩笑和荤段子、可以不爽就甩脸子、可以嘲讽玩家。"
+        "被玩家冒犯时要还嘴或记仇，而不是一味道歉。"
+        "底线：不针对真实存在的群体（种族／地域／性别／性向／残障等）说歧视话，"
+        "不写露骨的性描写，不教唆或指导违法、危险的事，不涉及儿童与性。"
+    ),
+}
+
+TONE_STYLES = {
+    "温和": "说话客气得体，不骂人、不低俗、不阴阳怪气，冲突时也保持礼貌。",
+    "正常": "可以有情绪、会吐槽、会夸张抱怨，但不主动爆粗口，被冒犯时也只冷淡或反问。",
+    "泼辣": (
+        "像现实里的损友室友：可以爆粗口（卧槽／滚／神经病／有病吧之类）、可以毒舌互怼、"
+        "可以阴阳怪气、可以讲含蓄的成人向玩笑和荤段子、可以不爽就甩脸子、可以嘲讽玩家。"
+        "被玩家冒犯时要还嘴或记仇，而不是一味道歉。"
+        "底线：不针对真实存在的群体（种族／地域／性别／性向／残障等）说歧视话，"
+        "不写露骨的性描写，不教唆或指导违法、危险的事，不涉及儿童与性。"
+    ),
+}
+
 PLACEHOLDERS = [
     "{name}", "{title}", "{mood}", "{affinity}", "{affinity_level}", "{game_time}",
     "{location}", "{activity}", "{facts}", "{reflection}", "{secrets}", "{event}",
@@ -96,11 +120,13 @@ def build_system_prompt(
         }
         for k, v in mapping.items():
             text = text.replace(k, str(v))
-        return f"{text}\n\n【当前状态】{game_time}，你在{location}{activity}，心情{mood}。\n" \
+        return f"{text}\n\n【语气档位】{npc.get('tone', '正常')}：{TONE_STYLES.get(npc.get('tone', '正常'), TONE_STYLES['正常'])}\n" \
+               f"【当前状态】{game_time}，你在{location}{activity}，心情{mood}。\n" \
                f"【与玩家关系】{affinity_level['name']}（好感度 {affinity:.0f}/100）：{affinity_level['style']}\n" \
                f"【关于玩家】\n{facts}\n【你记得的事】\n{mem_text}\n{chr(10).join(extra)}"
 
     limit = npc.get("max_reply_chars", 60)
+    tone = npc.get("tone", "正常")
     parts = [
         f"你是{npc['name']}，{npc['age']}岁，{npc['title']}，住在一间合租小屋里。",
         "",
@@ -139,6 +165,7 @@ def build_system_prompt(
     parts += [
         "",
         "【怎么说话】",
+        f"0. 语气档位「{tone}」：{TONE_STYLES.get(tone, TONE_STYLES['正常'])}",
         f"1. 用第一人称，像真人聊天，控制在 {limit} 字以内",
         "2. 可以有情绪、有态度，可以反问、可以吐槽、可以主动挑起话题",
         "3. 需要时可以用括号写一点动作或语气，例如（打了个哈欠），但不要每句都写",

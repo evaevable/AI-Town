@@ -23,7 +23,7 @@ DEFAULT_NPC = {
     "personality": "", "expertise": "", "hobbies": "", "speech_style": "",
     "catchphrases": [], "backstory": "", "relationships": {}, "secrets": [],
     "likes": [], "dislikes": [],
-    "temperature": 0.85, "max_reply_chars": 60,
+    "temperature": 0.85, "max_reply_chars": 60, "tone": "正常", "tone": "正常",
     "prompt_mode": "template", "system_prompt": "",
     "behavior": DEFAULT_BEHAVIOR, "schedule": [],
 }
@@ -71,8 +71,10 @@ class GameConfig:
         return names.index(name) if name in names else 0
 
 
-def normalize_npc(raw: Dict[str, Any], locations: Dict[str, str]) -> Dict[str, Any]:
+def normalize_npc(raw: Dict[str, Any], locations: Dict[str, str],
+                  default_tone: str = "正常") -> Dict[str, Any]:
     npc = copy.deepcopy(DEFAULT_NPC)
+    npc["tone"] = default_tone
     npc.update({k: v for k, v in (raw or {}).items() if v is not None})
     npc["behavior"] = {**DEFAULT_BEHAVIOR, **(raw.get("behavior") or {})}
 
@@ -80,6 +82,10 @@ def normalize_npc(raw: Dict[str, Any], locations: Dict[str, str]) -> Dict[str, A
         raise ValidationError(f"id 只能用小写字母开头的字母/数字/下划线：{npc['id']!r}")
     if not str(npc["name"]).strip():
         raise ValidationError("name 不能为空")
+    if npc.get("tone") not in ("温和", "正常", "泼辣"):
+        raise ValidationError("tone 只能是 温和 / 正常 / 泼辣")
+    if npc.get("tone") not in ("温和", "正常", "泼辣"):
+        raise ValidationError("tone 只能是 温和 / 正常 / 泼辣")
     if npc["prompt_mode"] not in ("template", "custom"):
         raise ValidationError("prompt_mode 只能是 template 或 custom")
     if npc["prompt_mode"] == "custom" and not str(npc["system_prompt"]).strip():
@@ -131,7 +137,8 @@ class Registry:
 
     def reload(self) -> None:
         data = _load_yaml(self.npcs_file)
-        npcs = [normalize_npc(n, self.game.locations) for n in data.get("npcs", [])]
+        tone_default = str(self.game.get("default_tone", "正常"))
+        npcs = [normalize_npc(n, self.game.locations, tone_default) for n in data.get("npcs", [])]
         self._validate_set(npcs)
         with self._lock:
             self._npcs = {n["id"]: n for n in npcs}
@@ -185,7 +192,7 @@ class Registry:
 
     # ---------- 修改 ----------
     def upsert(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        npc = normalize_npc(raw, self.game.locations)
+        npc = normalize_npc(raw, self.game.locations, str(self.game.get("default_tone", "正常")))
         npcs = self.all()
         idx = next((i for i, n in enumerate(npcs) if n["id"] == npc["id"]), None)
         if idx is None:
