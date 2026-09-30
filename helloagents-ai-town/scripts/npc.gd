@@ -1,250 +1,193 @@
-# NPC脚本
-extends CharacterBody2D  # ⭐ 改为CharacterBody2D
+# NPC：按后端配置生成，沿路点寻路移动，头顶显示独白/台词/情绪，可被玩家按 E 交互。
+extends CharacterBody2D
 
-# NPC信息
-@export var npc_name: String = "张三"
-@export var npc_title: String = "Python工程师"
+@export var npc_name: String = ""
+@export var npc_title: String = ""
 
-# NPC外观配置
-@export var sprite_frames: SpriteFrames = null  # 自定义精灵帧资源
+var npc_id: String = ""
+var place: String = "走廊"          # 当前所在地点名（由后端决定）
+var behavior: Dictionary = {}
+var emotion: String = ""
+var is_interacting: bool = false
 
-# NPC移动配置 ⭐ 
-@export var move_speed: float = 50.0  # 移动速度
-@export var wander_enabled: bool = true  # 是否启用巡逻
-@export var wander_range: float = 200.0  # 巡逻范围
-@export var wander_interval_min: float = 3.0  # 最小巡逻间隔(秒)
-@export var wander_interval_max: float = 8.0  # 最大巡逻间隔(秒)
-
-# 当前对话内容(从后端获取)
-var current_dialogue: String = ""
-
-# 节点引用
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var interaction_area: Area2D = $InteractionArea
 @onready var name_label: Label = $NameLabel
 @onready var dialogue_label: Label = $DialogueLabel
 
-# 交互提示 (可选节点,如果不存在也不会报错)
-var interaction_hint: Label = null
+var emotion_label: Label
+var _path: Array = []
+var _walk_timer := 0.0
+var _bubble_timer := 0.0
+var _idle_anim := "idle_down"
+var _last_pos := Vector2.ZERO
+var _stuck := 0.0
+var _pass_through := false
+var _sprite_name := "character_2"
 
-# 玩家引用
-var player: Node = null
-
-# 巡逻相关变量 ⭐ 
-var wander_target: Vector2 = Vector2.ZERO  # 巡逻目标位置
-var wander_timer: float = 0.0  # 巡逻计时器
-var is_wandering: bool = false  # 是否正在巡逻
-var is_interacting: bool = false  # 是否正在与玩家交互
-var spawn_position: Vector2 = Vector2.ZERO  # 出生位置
-
-func _ready():
-	# 添加到npcs组 ⭐ 
+func _ready() -> void:
 	add_to_group("npcs")
-
-	# 设置NPC名字
+	_last_pos = global_position
+	if npc_name == "":
+		npc_name = name
 	name_label.text = npc_name
-
-	# 连接交互区域信号
-	interaction_area.body_entered.connect(_on_body_entered)
-	interaction_area.body_exited.connect(_on_body_exited)
-
-	# 初始化对话标签
 	dialogue_label.text = ""
 	dialogue_label.visible = false
+	interaction_area.body_entered.connect(_on_body_entered)
+	interaction_area.body_exited.connect(_on_body_exited)
+	_build_emotion_label()
+	if animated_sprite.sprite_frames and animated_sprite.sprite_frames.has_animation(_idle_anim):
+		animated_sprite.play(_idle_anim)
 
-	# 尝试获取交互提示节点 (可选)
-	interaction_hint = get_node_or_null("InteractionHint")
-	if interaction_hint:
-		interaction_hint.text = "按E交互"
-		interaction_hint.visible = false
-		print("[INFO] NPC交互提示已启用: ", npc_name)
-	else:
-		print("[WARN] NPC没有InteractionHint节点,交互提示已禁用: ", npc_name)
+func _build_emotion_label() -> void:
+	emotion_label = Label.new()
+	emotion_label.name = "EmotionLabel"
+	emotion_label.position = Vector2(-40, -112)
+	emotion_label.size = Vector2(96, 26)
+	emotion_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	emotion_label.add_theme_color_override("font_color", Color(0.93, 0.42, 0.6))
+	emotion_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.9))
+	emotion_label.add_theme_constant_override("outline_size", 7)
+	emotion_label.text = ""
+	add_child(emotion_label)
 
-	# 设置自定义精灵帧 (如果有)
-	if sprite_frames != null:
-		animated_sprite.sprite_frames = sprite_frames
-		print("[INFO] NPC使用自定义精灵: ", npc_name)
+# ---------- 由 main.gd 调用 ----------
+func setup(info: Dictionary) -> void:
+	npc_id = str(info.get("id", ""))
+	npc_name = str(info.get("name", npc_name))
+	npc_title = str(info.get("title", ""))
+	place = str(info.get("spawn", "走廊"))
+	behavior = info.get("behavior", {})
+	_sprite_name = str(info.get("sprite", "character_2"))
+	name_label.text = npc_name
+	var frames := Sprites.build(_sprite_name)
+	if frames.get_animation_names().size() > 0:
+		animated_sprite.sprite_frames = frames
+		animated_sprite.play(_idle_anim)
+	var tint := str(info.get("tint", "#ffffff"))
+	if tint != "#ffffff" and tint != "":
+		animated_sprite.modulate = Color(tint)
 
-	# 播放默认动画
-	if animated_sprite.sprite_frames != null and animated_sprite.sprite_frames.has_animation("idle"):
-		animated_sprite.play("idle")
+func goto_place(new_place: String) -> void:
+	if new_place == place:
+		return
+	place = new_place
+	_path = WorldMap.path(_current_node(), place)
+	behavior["wander"] = behavior.get("wander", true)
 
-	# 记录出生位置 ⭐ 
-	spawn_position = global_position
+func _current_node() -> String:
+	var best := place
+	var best_d := 999999.0
+	for k in WorldMap.POINTS.keys():
+		var d: float = global_position.distance_to(WorldMap.POINTS[k])
+		if d < best_d:
+			best_d = d
+			best = str(k)
+	return best
 
-	# 初始化巡逻计时器 ⭐ 
-	if wander_enabled:
-		wander_timer = randf_range(wander_interval_min, wander_interval_max)
-		choose_new_wander_target()
-
-	Config.log_info("NPC初始化: " + npc_name)
-
-func _on_body_entered(body: Node2D):
-	"""玩家进入交互范围"""
-	print("[DEBUG] NPC ", npc_name, " 检测到物体进入: ", body.name, " 是否在player组: ", body.is_in_group("player"))
-
-	if body.is_in_group("player"):
-		player = body
-		print("[INFO] ✅ 玩家进入NPC范围: ", npc_name)
-
-		if player.has_method("set_nearby_npc"):
-			player.set_nearby_npc(self)
-		else:
-			print("[ERROR] 玩家没有set_nearby_npc方法!")
-
-		# 显示提示
-		show_interaction_hint()
-
-func _on_body_exited(body: Node2D):
-	"""玩家离开交互范围"""
-	print("[DEBUG] NPC ", npc_name, " 检测到物体离开: ", body.name)
-
-	if body.is_in_group("player"):
-		print("[INFO] ❌ 玩家离开NPC范围: ", npc_name)
-
-		if player != null and player.has_method("set_nearby_npc"):
-			player.set_nearby_npc(null)
-		player = null
-
-		# 隐藏提示
-		hide_interaction_hint()
-
-func show_interaction_hint():
-	"""显示交互提示"""
-	if interaction_hint:
-		interaction_hint.visible = true
-		print("[INFO] 显示交互提示: ", npc_name)
-
-func hide_interaction_hint():
-	"""隐藏交互提示"""
-	if interaction_hint:
-		interaction_hint.visible = false
-		print("[INFO] 隐藏交互提示: ", npc_name)
-
-func update_dialogue(dialogue: String):
-	"""更新NPC对话内容"""
-	current_dialogue = dialogue
-	dialogue_label.text = dialogue
+func show_bubble(text: String, seconds: float = 8.0) -> void:
+	if text.strip_edges() == "":
+		return
+	dialogue_label.text = text
 	dialogue_label.visible = true
+	_bubble_timer = seconds
 
-	# 10秒后隐藏对话 (增加显示时间)
-	await get_tree().create_timer(10.0).timeout
-	dialogue_label.visible = false
+func set_emotion(value: String) -> void:
+	emotion = value
+	if emotion_label:
+		var pool := ["开心", "害羞", "惊讶", "生气", "难过", "无语", "得意", "思考"]
+		emotion_label.text = value if value in pool else ""
 
-func get_npc_name() -> String:
-	return npc_name
+func set_interacting(v: bool) -> void:
+	is_interacting = v
+	_path.clear()
+	velocity = Vector2.ZERO
 
-func get_npc_title() -> String:
-	return npc_title
+func place_name() -> String:
+	return place
 
-# ⭐ 物理更新 - 处理移动
-func _physics_process(delta: float):
-	"""物理更新 - 处理移动"""
-	# 如果正在与玩家交互,停止移动
+# ---------- 物理 ----------
+func _physics_process(delta: float) -> void:
+	if _bubble_timer > 0.0:
+		_bubble_timer -= delta
+		if _bubble_timer <= 0.0:
+			dialogue_label.visible = false
+
 	if is_interacting:
 		velocity = Vector2.ZERO
 		move_and_slide()
-		# 播放idle动画
-		if animated_sprite.sprite_frames != null and animated_sprite.sprite_frames.has_animation("idle"):
-			animated_sprite.play("idle")
+		_play("idle_down")
 		return
 
-	# 如果未启用巡逻,不移动
-	if not wander_enabled:
-		return
-
-	# 更新巡逻计时器
-	wander_timer -= delta
-
-	# 如果计时器结束,选择新目标并开始移动
-	if wander_timer <= 0:
-		choose_new_wander_target()
-		wander_timer = randf_range(wander_interval_min, wander_interval_max)
-
-	# 如果正在巡逻,移动到目标
-	if is_wandering:
-		# 检查是否到达目标
-		if global_position.distance_to(wander_target) < 10:
-			# 到达目标,停止移动
-			is_wandering = false
-			velocity = Vector2.ZERO
-			move_and_slide()
-			# 播放idle动画
-			if animated_sprite.sprite_frames != null and animated_sprite.sprite_frames.has_animation("idle"):
-				animated_sprite.play("idle")
+	var target := Vector2.ZERO
+	if _path.size() > 0:
+		target = _path[0]
+		if global_position.distance_to(target) < 12.0:
+			_path.pop_front()
+			if _path.is_empty():
+				_play(_idle_anim)
+			return
+	else:
+		if not behavior.get("wander", true):
+			_play(_idle_anim)
+			return
+		_walk_timer -= delta
+		if _walk_timer <= 0.0:
+			_walk_timer = randf_range(2.5, 6.0)
+			var radius: float = float(behavior.get("wander_radius", 60))
+			var base: Vector2 = WorldMap.point(place)
+			_path = [base + Vector2(randf_range(-radius, radius), randf_range(-radius * 0.6, radius * 0.6))]
 		else:
-			# 继续移动到目标
-			var direction = (wander_target - global_position).normalized()
-			velocity = direction * move_speed
-			move_and_slide()
-			# 更新动画
-			update_animation(direction)
-	else:
-		# 停止移动
-		velocity = Vector2.ZERO
-		move_and_slide()
-		# 播放idle动画
-		if animated_sprite.sprite_frames != null and animated_sprite.sprite_frames.has_animation("idle"):
-			animated_sprite.play("idle")
+			_play(_idle_anim)
+			return
 
-# ⭐ 选择新的巡逻目标
-func choose_new_wander_target():
-	"""选择新的巡逻目标"""
-	# 在出生位置附近随机选择一个点
-	var offset = Vector2(
-		randf_range(-wander_range, wander_range),
-		randf_range(-wander_range, wander_range)
-	)
-	wander_target = spawn_position + offset
-	is_wandering = true
-
-	Config.log_info("NPC %s 选择新目标: %s" % [npc_name, wander_target])
-
-# ⭐ 更新动画
-func update_animation(direction: Vector2):
-	"""更新动画"""
-	if animated_sprite.sprite_frames == null:
+	var dir := target - global_position
+	if dir.length() < 1.0:
 		return
+	dir = dir.normalized()
+	velocity = dir * float(behavior.get("move_speed", 60))
+	move_and_slide()
+	_update_anim(dir)
+	z_index = int(global_position.y / 4.0)
+	_check_stuck(delta)
 
-	if direction.length() > 0:
-		# 移动动画
-		if abs(direction.x) > abs(direction.y):
-			# 左右移动
-			if direction.x > 0:
-				if animated_sprite.sprite_frames.has_animation("walk_right"):
-					animated_sprite.play("walk_right")
-				elif animated_sprite.sprite_frames.has_animation("walk"):
-					animated_sprite.play("walk")
-					animated_sprite.flip_h = false
-			else:
-				if animated_sprite.sprite_frames.has_animation("walk_left"):
-					animated_sprite.play("walk_left")
-				elif animated_sprite.sprite_frames.has_animation("walk"):
-					animated_sprite.play("walk")
-					animated_sprite.flip_h = true
-		else:
-			# 上下移动
-			if direction.y > 0:
-				if animated_sprite.sprite_frames.has_animation("walk_down"):
-					animated_sprite.play("walk_down")
-				elif animated_sprite.sprite_frames.has_animation("walk"):
-					animated_sprite.play("walk")
-			else:
-				if animated_sprite.sprite_frames.has_animation("walk_up"):
-					animated_sprite.play("walk_up")
-				elif animated_sprite.sprite_frames.has_animation("walk"):
-					animated_sprite.play("walk")
+func _check_stuck(delta: float) -> void:
+	# 撞在墙上时短暂关掉碰撞穿过去，避免 NPC 永远卡在角落
+	if global_position.distance_to(_last_pos) < 0.5:
+		_stuck += delta
+		if _stuck > 1.5 and not _pass_through:
+			_pass_through = true
+			set_collision_mask_value(1, false)
 	else:
-		# 静止动画
-		if animated_sprite.sprite_frames.has_animation("idle"):
-			animated_sprite.play("idle")
+		_stuck = 0.0
+		if _pass_through:
+			_pass_through = false
+			set_collision_mask_value(1, true)
+	_last_pos = global_position
 
-# ⭐ 设置交互状态
-func set_interacting(interacting: bool):
-	"""设置交互状态"""
-	is_interacting = interacting
-	if interacting:
-		Config.log_info("NPC %s 进入交互状态,停止移动" % npc_name)
+func _play(anim: String) -> void:
+	if animated_sprite.sprite_frames and animated_sprite.sprite_frames.has_animation(anim):
+		if animated_sprite.animation != anim:
+			animated_sprite.play(anim)
+
+func _update_anim(dir: Vector2) -> void:
+	var anim := _idle_anim
+	if absf(dir.x) > absf(dir.y):
+		anim = "walk_right" if dir.x > 0 else "walk_left"
+		_idle_anim = "idle_right" if dir.x > 0 else "idle_left"
+		animated_sprite.flip_h = false
 	else:
-		Config.log_info("NPC %s 退出交互状态,恢复移动" % npc_name)
+		anim = "walk_down" if dir.y > 0 else "walk_up"
+		_idle_anim = "idle_down" if dir.y > 0 else "idle_up"
+	_play(anim)
+
+# ---------- 交互 ----------
+func _on_body_entered(body: Node2D) -> void:
+	if body.is_in_group("player"):
+		if body.has_method("set_nearby_npc"):
+			body.set_nearby_npc(self)
+		Net.notify_near(npc_id)
+
+func _on_body_exited(body: Node2D) -> void:
+	if body.is_in_group("player") and body.has_method("set_nearby_npc"):
+		body.set_nearby_npc(null)

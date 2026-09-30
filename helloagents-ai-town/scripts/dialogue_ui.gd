@@ -1,206 +1,274 @@
-# 对话UI脚本
+# 对话界面：流式打字效果、快捷回复、送礼、好感度条、情绪与心情。
 extends CanvasLayer
 
-# 节点引用
-@onready var panel: Panel = $Panel
-@onready var npc_name_label: Label = $Panel/NPCName
-@onready var npc_title_label: Label = $Panel/NPCTitle
-@onready var dialogue_text: RichTextLabel = $Panel/DialogueText
-@onready var player_input: LineEdit = $Panel/PlayerInput
-@onready var send_button: Button = $Panel/SendButton
-@onready var close_button: Button = $Panel/CloseButton
+var current: Node = null              # 当前对话的 NPC
+var inventory: Array = []
 
-# 当前对话的NPC
-var current_npc_name: String = ""
+var panel: PanelContainer
+var title_label: Label
+var aff_bar: ProgressBar
+var aff_label: Label
+var mood_label: Label
+var body: RichTextLabel
+var quick_box: HBoxContainer
+var input: LineEdit
+var send_btn: Button
+var gift_btn: Button
+var close_btn: Button
+var gift_menu: PopupMenu
+var waiting := false
+var _pending := false   # 已经发出请求，正在等这一轮的回复（防止并发串台）
 
-# API客户端引用
-var api_client: Node = null
-
-func _ready():
-	# 添加到对话系统组
+func _ready() -> void:
 	add_to_group("dialogue_system")
-
-	# 初始隐藏
 	visible = false
+	_build_ui()
+	Net.chat_start.connect(_on_chat_start)
+	Net.chat_delta.connect(_on_chat_delta)
+	Net.chat_replace.connect(_on_chat_replace)
+	Net.chat_end.connect(_on_chat_end)
+	Net.gift_result.connect(_on_gift_result)
+	Net.inventory.connect(_on_inventory)
+	Net.toast.connect(_on_toast)
 
-	# 连接按钮信号
-	send_button.pressed.connect(_on_send_button_pressed)
-	close_button.pressed.connect(_on_close_button_pressed)
-	player_input.text_submitted.connect(_on_text_submitted)
+func _build_ui() -> void:
+	panel = PanelContainer.new()
+	panel.name = "Panel"
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 1.0
+	panel.anchor_bottom = 1.0
+	panel.offset_left = -470
+	panel.offset_right = 470
+	panel.offset_top = -330
+	panel.offset_bottom = -20
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(1, 0.99, 0.96, 0.97)
+	style.border_color = Color(0.78, 0.76, 0.71)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(12)
+	style.set_content_margin_all(14)
+	panel.add_theme_stylebox_override("panel", style)
+	add_child(panel)
 
-	# 获取API客户端
-	api_client = get_node_or_null("/root/APIClient")
-	if api_client:
-		api_client.chat_response_received.connect(_on_chat_response_received)
-		api_client.chat_error.connect(_on_chat_error)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 8)
+	panel.add_child(col)
 
-	print("[INFO] 对话UI初始化完成")
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 10)
+	col.add_child(head)
+	title_label = Label.new()
+	title_label.add_theme_font_size_override("font_size", 18)
+	head.add_child(title_label)
+	mood_label = Label.new()
+	mood_label.add_theme_font_size_override("font_size", 13)
+	head.add_child(mood_label)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(spacer)
+	aff_bar = ProgressBar.new()
+	aff_bar.custom_minimum_size = Vector2(180, 16)
+	aff_bar.max_value = 100
+	aff_bar.show_percentage = false
+	head.add_child(aff_bar)
+	aff_label = Label.new()
+	aff_label.add_theme_font_size_override("font_size", 13)
+	head.add_child(aff_label)
 
-# ⭐ 处理对话框快捷键
-func _input(event: InputEvent):
-	# 如果对话框不可见,不处理
+	body = RichTextLabel.new()
+	body.bbcode_enabled = true
+	body.scroll_following = true
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.custom_minimum_size = Vector2(0, 150)
+	col.add_child(body)
+
+	quick_box = HBoxContainer.new()
+	quick_box.add_theme_constant_override("separation", 6)
+	col.add_child(quick_box)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	col.add_child(row)
+	input = LineEdit.new()
+	input.placeholder_text = "说点什么…（回车发送）"
+	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(input)
+	send_btn = Button.new()
+	send_btn.text = "发送"
+	row.add_child(send_btn)
+	gift_btn = Button.new()
+	gift_btn.text = "送礼"
+	row.add_child(gift_btn)
+	close_btn = Button.new()
+	close_btn.text = "离开 (ESC)"
+	row.add_child(close_btn)
+
+	gift_menu = PopupMenu.new()
+	add_child(gift_menu)
+
+	send_btn.pressed.connect(_send)
+	input.text_submitted.connect(func(_t): _send())
+	gift_btn.pressed.connect(_open_gift_menu)
+	gift_menu.id_pressed.connect(_on_gift_id)
+
+func _input(event: InputEvent) -> void:
 	if not visible:
 		return
-
 	if event is InputEventKey and event.pressed and not event.echo:
-		# ESC键 - 关闭对话框 
 		if event.keycode == KEY_ESCAPE:
-			hide_dialogue()
+			close_dialogue()
 			get_viewport().set_input_as_handled()
-			print("[DEBUG] ESC键关闭对话框")
-			return
+		elif event.keycode in [KEY_E, KEY_SPACE, KEY_W, KEY_A, KEY_S, KEY_D]:
+			if not input.has_focus() and event.keycode != KEY_SPACE:
+				get_viewport().set_input_as_handled()
 
-		# 回车键 - 发送消息 (仅当输入框有焦点时) 
-		# 注意: LineEdit的text_submitted信号已经处理了回车,这里只是额外保险
-		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
-			# 如果输入框有焦点,让LineEdit自己处理
-			if player_input.has_focus():
-				return
-			# 否则手动发送
-			send_message()
-			get_viewport().set_input_as_handled()
-			print("[DEBUG] 回车键发送消息")
-			return
-
-		# 屏蔽移动键和交互键,防止触发游戏操作 ⭐ WASD键
-		if event.keycode in [KEY_E, KEY_SPACE, KEY_W, KEY_A, KEY_S, KEY_D]:
-			get_viewport().set_input_as_handled()
-			# 只在第一次屏蔽时打印,避免刷屏
-			match event.keycode:
-				KEY_E:
-					print("[DEBUG] 对话框中屏蔽了E键输入")
-				KEY_SPACE:
-					print("[DEBUG] 对话框中屏蔽了空格键输入")
-				KEY_W:
-					print("[DEBUG] 对话框中屏蔽了W键输入")
-				KEY_A:
-					print("[DEBUG] 对话框中屏蔽了A键输入")
-				KEY_S:
-					print("[DEBUG] 对话框中屏蔽了S键输入")
-				KEY_D:
-					print("[DEBUG] 对话框中屏蔽了D键输入")
-
-func start_dialogue(npc_name: String):
-	"""开始与NPC对话"""
-	current_npc_name = npc_name
-
-	# 通知NPC进入交互状态 (停止移动) 
-	var npc = get_npc_by_name(npc_name)
-	if npc and npc.has_method("set_interacting"):
+# ---------- 开关 ----------
+func start_dialogue(npc) -> void:
+	if typeof(npc) == TYPE_STRING:
+		npc = _find_npc(str(npc))
+	if npc == null:
+		return
+	current = npc
+	if npc.has_method("set_interacting"):
 		npc.set_interacting(true)
-
-	# 设置NPC信息
-	npc_name_label.text = npc_name
-	npc_title_label.text = Config.NPC_TITLES.get(npc_name, "")
-
-	# 清空对话内容
-	dialogue_text.clear()
-	dialogue_text.append_text("[color=gray]与 " + npc_name + " 的对话开始...[/color]\n")
-
-	# 清空输入框
-	player_input.text = ""
-
-	# 显示对话框
-	show_dialogue()
-
-	# 聚焦输入框
-	player_input.grab_focus()
-
-	print("[INFO] 开始对话: ", npc_name)
-
-func show_dialogue():
-	"""显示对话框"""
+	title_label.text = "%s  ·  %s" % [npc.npc_name, npc.npc_title]
+	mood_label.text = "心情 " + str(npc.behavior.get("mood", ""))
+	body.clear()
+	body.append_text("[color=#8a8780]—— 和 %s 的对话（现在的记忆会一直留着）——[/color]\n" % npc.npc_name)
+	_clear_quick()
 	visible = true
-
-	# 通知玩家进入交互状态 (禁用移动)
-	var player = get_tree().get_first_node_in_group("player")
+	input.grab_focus()
+	_set_waiting(false)
+	var player := get_tree().get_first_node_in_group("player")
 	if player and player.has_method("set_interacting"):
 		player.set_interacting(true)
 
-func hide_dialogue():
-	"""隐藏对话框"""
+func close_dialogue() -> void:
+	if current and current.has_method("set_interacting"):
+		current.set_interacting(false)
+	current = null
 	visible = false
-
-	# 通知NPC退出交互状态 (恢复移动) 
-	if current_npc_name != "":
-		var npc = get_npc_by_name(current_npc_name)
-		if npc and npc.has_method("set_interacting"):
-			npc.set_interacting(false)
-
-	current_npc_name = ""
-
-	# 通知玩家退出交互状态 (启用移动)
-	var player = get_tree().get_first_node_in_group("player")
+	var player := get_tree().get_first_node_in_group("player")
 	if player and player.has_method("set_interacting"):
 		player.set_interacting(false)
 
-func _on_send_button_pressed():
-	"""发送按钮点击"""
-	send_message()
+func open_with(npc) -> void:
+	start_dialogue(npc)
 
-func _on_text_submitted(_text: String):
-	"""输入框回车"""
-	send_message()
-
-func send_message():
-	"""发送消息"""
-	var message = player_input.text.strip_edges()
-	
-	if message.is_empty():
-		return
-	
-	if current_npc_name.is_empty():
-		print("[ERROR] 没有选择NPC")
-		return
-	
-	# 显示玩家消息
-	dialogue_text.append_text("\n[color=cyan]玩家:[/color] " + message + "\n")
-	
-	# 清空输入框
-	player_input.text = ""
-	
-	# 显示等待提示
-	dialogue_text.append_text("[color=gray]等待回复...[/color]\n")
-	
-	# 发送API请求
-	if api_client:
-		api_client.send_chat(current_npc_name, message)
-	else:
-		print("[ERROR] API客户端未找到")
-
-func _on_chat_response_received(npc_name: String, message: String):
-	"""收到NPC回复"""
-	if npc_name != current_npc_name:
-		return
-	
-	# 移除"等待回复..."
-	var text = dialogue_text.get_parsed_text()
-	if text.ends_with("等待回复...\n"):
-		# 清除最后一行
-		dialogue_text.clear()
-		var lines = text.split("\n")
-		for i in range(lines.size() - 2):
-			dialogue_text.append_text(lines[i] + "\n")
-	
-	# 显示NPC回复
-	dialogue_text.append_text("[color=yellow]" + npc_name + ":[/color] " + message + "\n")
-	
-	# 滚动到底部
-	dialogue_text.scroll_to_line(dialogue_text.get_line_count() - 1)
-
-func _on_chat_error(error_message: String):
-	"""对话错误"""
-	dialogue_text.append_text("[color=red]错误: " + error_message + "[/color]\n")
-
-func _on_close_button_pressed():
-	"""关闭按钮点击"""
-	hide_dialogue()
-
-# ⭐ 根据名字获取NPC节点
-func get_npc_by_name(npc_name: String) -> Node:
-	"""根据名字获取NPC节点"""
-	var npcs = get_tree().get_nodes_in_group("npcs")
-	for npc in npcs:
-		if npc.npc_name == npc_name:
-			return npc
+func _find_npc(npc_name: String) -> Node:
+	for n in get_tree().get_nodes_in_group("npcs"):
+		if n.npc_name == npc_name:
+			return n
 	return null
+
+# ---------- 发送 ----------
+func _send() -> void:
+	if current == null or waiting:
+		return
+	var text := input.text.strip_edges()
+	if text.is_empty():
+		return
+	input.text = ""
+	body.append_text("\n[color=#1d6fa5][b]你[/b][/color]  " + text + "\n")
+	body.append_text("[color=#b0aca4]%s 在想…[/color]" % current.npc_name)
+	_pending = true
+	_set_waiting(true)
+	Net.say(current.npc_id, text)
+
+func _set_waiting(v: bool) -> void:
+	waiting = v
+	send_btn.disabled = v
+	input.editable = not v
+
+func _clear_quick() -> void:
+	for c in quick_box.get_children():
+		c.queue_free()
+
+# ---------- 后端事件 ----------
+func _on_chat_start(data: Dictionary) -> void:
+	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
+		return
+	# 去掉"在想…"占位
+	var plain := body.get_parsed_text()
+	if plain.ends_with("在想…"):
+		body.clear()
+		var lines := plain.split("\n")
+		for i in range(lines.size() - 1):
+			body.append_text(lines[i] + "\n")
+	body.append_text("[color=#b0781a][b]%s[/b][/color]  " % current.npc_name)
+	_clear_quick()
+
+func _on_chat_delta(data: Dictionary) -> void:
+	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
+		return
+	body.append_text(str(data.get("text", "")))
+
+func _on_chat_replace(data: Dictionary) -> void:
+	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
+		return
+	var plain := body.get_parsed_text()
+	var idx := plain.rfind(current.npc_name)
+	if idx >= 0:
+		body.clear()
+		body.append_text(plain.substr(0, idx))
+	body.append_text("[color=#b0781a][b]%s[/b][/color]  %s" % [current.npc_name, str(data.get("text", ""))])
+
+func _on_chat_end(data: Dictionary) -> void:
+	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
+		return
+	_pending = false
+	body.append_text("\n")
+	aff_bar.value = float(data.get("affinity", 0))
+	var change := float(data.get("affinity_change", 0))
+	aff_label.text = "%s %d  %s" % [data.get("level", ""), int(aff_bar.value),
+		("+%d" % int(change)) if change > 0 else ("%d" % int(change) if change < 0 else "")]
+	current.set_emotion(str(data.get("emotion", "")))
+	for opt in data.get("reply_options", []):
+		var b := Button.new()
+		b.text = str(opt)
+		b.add_theme_font_size_override("font_size", 12)
+		b.pressed.connect(func():
+			input.text = b.text
+			_send())
+		quick_box.add_child(b)
+	_set_waiting(false)
+	input.grab_focus()
+
+func _open_gift_menu() -> void:
+	gift_menu.clear()
+	if inventory.is_empty():
+		gift_menu.add_item("背包是空的", 0)
+		gift_menu.set_item_disabled(0, true)
+	for i in inventory.size():
+		gift_menu.add_item("%s ×%d" % [inventory[i].item, int(inventory[i].count)], i)
+	gift_menu.position = Vector2i(get_viewport().get_mouse_position()) + Vector2i(10, 10)
+	gift_menu.popup()
+
+func _on_gift_id(id: int) -> void:
+	if current == null or id < 0 or id >= inventory.size():
+		return
+	var item := str(inventory[id].item)
+	body.append_text("\n[color=#8a8780]你送出了 %s…[/color]\n" % item)
+	_pending = true
+	_set_waiting(true)
+	Net.gift(current.npc_id, item)
+
+func _on_gift_result(data: Dictionary) -> void:
+	_pending = false
+	_set_waiting(false)
+	if current == null or data.get("npc_id", "") != current.npc_id:
+		return
+	body.append_text("[color=#b0781a][b]%s[/b][/color]  %s\n" % [current.npc_name, data.get("text", "")])
+	aff_bar.value = float(data.get("affinity", aff_bar.value))
+	var change := float(data.get("affinity_change", 0))
+	aff_label.text = "%s %d  %s" % [data.get("level", ""), int(aff_bar.value),
+		("+%d" % int(change)) if change > 0 else "%d" % int(change)]
+	current.set_emotion("开心" if data.get("liked") else ("难过" if data.get("disliked") else ""))
+
+func _on_inventory(items: Array) -> void:
+	inventory = items
+
+func _on_toast(text: String) -> void:
+	if visible:
+		body.append_text("[color=#3b6d11]※ %s[/color]\n" % text)

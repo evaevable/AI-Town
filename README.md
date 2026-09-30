@@ -1,38 +1,90 @@
-# 赛博小镇 - AI NPC对话系统
+# 合租小屋 · AI NPC 小镇
 
-基于HelloAgents框架的AI小镇模拟游戏,展示多智能体系统在游戏中的应用。
+一个可以走进去、和会记事的 AI 角色聊天的 2D 像素小屋。灵感来自 Hello-Agents 的「赛博小镇」，
+这一版把原来的教学示例重写成了可以长期玩、也可以随时改人设的小游戏。
 
-## 🎮 功能特性
+- **后端**：FastAPI + SQLite + OpenAI 兼容接口（流式）
+- **前端**：Godot 4.5（像素角色、路点寻路、打字机对话、表情气泡）
+- **管理台**：浏览器里改人设、看记忆、当导演（不用重启游戏）
 
-- ✅ 3个AI NPC (张三、李四、王五)
-- ✅ 智能对话系统
-- ✅ 记忆系统 (短期+长期记忆)
-- ✅ 好感度系统 (5个等级)
-- ✅ NPC自主行为 (闲逛、工作)
-- ✅ 完整的日志系统
+## 三个住客（想改成谁都行）
 
-## 🛠️ 技术栈
+| 角色 | 身份 | 特点 |
+|---|---|---|
+| 柒柒 | 医生 | 温柔脾气好，爱做饭也爱打游戏，会念叨你按时吃饭 |
+| 泽不易 | 无业游民 | 邋遢、随和，天天在电脑桌前打游戏，嘴上吊儿郎当 |
+| 谦谦 | 大学生 | 热心单纯，是个对 wana 有求必应的死心塌地大舔狗 |
 
-- **游戏引擎:** Godot 4.x
-- **后端框架:** FastAPI + Python 3.10+
-- **AI框架:** HelloAgents
-- **LLM:** OpenAI GPT-4 (可配置其余的LLM服务)
+人设不写死在代码里：`backend/data/npcs.yaml` 是唯一真源，管理台改完立刻生效，最多 4 个 NPC。
 
-## 📦 快速开始
+## 快速开始
 
-详见 [SETUP_GUIDE.md](SETUP_GUIDE.md)
+```bash
+# 1. 后端
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # 按需改模型地址；不配也能用 Mock 模式跑起来
+python main.py                  # 监听 http://127.0.0.1:8010
 
-## 📚 文档
+# 2. 游戏
+# 用 Godot 4.5 打开 helloagents-ai-town/project.godot，按 F5 运行
+# WASD 走路，走到 NPC 旁边按 E 说话，回车发送，ESC 关闭
 
-- [安装配置指南](SETUP_GUIDE.md)
-- [对话日志系统](DIALOGUE_LOG_GUIDE.md)
-- [好感度系统](AFFINITY_SYSTEM_GUIDE.md)
-- [记忆系统](MEMORY_SYSTEM_GUIDE.md)
+# 3. 管理台
+open http://127.0.0.1:8010/admin
+```
 
-## 📖 教程
+> 端口默认 **8010**（8000 常被别的服务占用）。要改端口的话，同时改 `backend/.env` 和
+> `helloagents-ai-town/scripts/net.gd` 里的 `HTTP_BASE` / `WS_URL`。
 
-本项目是《Hello-agents》教材第15章的配套案例。
+## 玩什么
 
-## 📄 许可证
+- **聊天**：流式打字效果；每人有自己的说话风格，好感度从陌生到挚友 5 档，语气跟着变
+- **随机**：每天随机心情、随机话题种子、会突然翻旧账、会讲听来的八卦，同一句话很少答得一样
+- **送礼**：背包里选东西送人，送对了好感度大涨，送错了会被当面嫌弃
+- **委托**：NPC 会托你给别的室友带句话，办完有谢礼
+- **看他们自己过日子**：头顶冒独白，两个人凑一起会自己聊起来，聊完还会互相"传播"
+- **导演面板**：暂停/加速时间、下一场雨、把某人支去厨房、单独关掉某人的闲逛或独白
 
-CC BY-NC-SA 4.0
+## 记忆是怎么做的
+
+每个 NPC 对玩家的记忆分六层，全部落在 SQLite 里，重启不丢：
+
+| 层 | 说明 |
+|---|---|
+| 短期窗口 | 最近 8 轮原文，直接进上下文 |
+| 情景记忆 | 每轮一句话摘要 + 重要性 + 情绪，用 FTS5（中文按两字切分）+ 近因 + 重要性加权检索 |
+| 玩家档案 | 名字、职业、喜好、约定这类稳定事实，始终注入 |
+| 反思 | 攒够重要性后自动总结"我怎么看这个人" |
+| 八卦 | 听其他 NPC 说的，带来源 |
+| 世界记忆 | 小镇发生过的事件，所有人都知道 |
+
+管理台的「记忆」页能看每个 NPC 记住了什么、每轮检索到哪几条以及各自得分，也能直接改和删。
+
+## 文档
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 目录结构、接口、事件协议
+- [`docs/CUSTOMIZE.md`](docs/CUSTOMIZE.md) — 改人设 / 加 NPC / 改地图点位 / 换模型 / 调随机度
+- 管理台：<http://127.0.0.1:8010/admin>（人设、记忆、导演面板、玩家状态）
+
+## 测试
+
+```bash
+cd backend && python -m pytest tests -q -p no:cacheprovider --basetemp=.pytest_tmp
+```
+
+14 项测试覆盖人设校验、记忆检索打分、反思、送礼、日程、独白、NPC 互聊、导演指令、
+REST 接口与 WebSocket 全流程（全部用 Mock 模型，不联网）。
+
+前端自检（需要后端先跑起来）：
+
+```bash
+cd helloagents-ai-town
+AITOWN_AUTOTEST=1 ~/Applications/Godot.app/Contents/MacOS/Godot --headless --path . --quit-after 8000
+```
+
+## 许可证
+
+原项目为 CC BY-NC-SA 4.0（署名-非商业性使用-相同方式共享）。本衍生版本沿用同一协议：
+可用于个人学习与非商业用途；商用需另行获得授权，再分发需保持相同协议。

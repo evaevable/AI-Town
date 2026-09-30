@@ -1,61 +1,226 @@
-# 主场景脚本
+# 主场景：按后端配置生成 NPC，接收后端推送的世界状态与台词。
 extends Node2D
 
-# NPC节点引用
-@onready var npc_zhang: Node2D = $NPCs/NPC_Zhang
-@onready var npc_li: Node2D = $NPCs/NPC_Li
-@onready var npc_wang: Node2D = $NPCs/NPC_Wang
+const NPC_SCENE := preload("res://scenes/npc.tscn")
 
-# API客户端
-var api_client: Node = null
+@onready var npc_root: Node2D = $NPCs
+@onready var dialogue: Node = $DialogueUI
 
-# NPC状态更新计时器
-var status_update_timer: float = 0.0
+var hud: Control
+var clock_label: Label
+var event_label: Label
+var toast_label: Label
+var quest_box: VBoxContainer
+var npcs := {}                      # npc_id -> Node
+var _toast_timer := 0.0
 
-func _ready():
+func _ready() -> void:
 	print("[INFO] 主场景初始化")
-	
-	# 获取API客户端
-	api_client = get_node_or_null("/root/APIClient")
-	if api_client:
-		api_client.npc_status_received.connect(_on_npc_status_received)
-		
-		# 立即获取一次NPC状态
-		api_client.get_npc_status()
-	else:
-		print("[ERROR] API客户端未找到")
+	_build_hud()
+	Net.welcome.connect(_on_welcome)
+	Net.npcs_changed.connect(func(list): _spawn_npcs(list))
+	Net.npc_move.connect(_on_npc_move)
+	Net.bubble.connect(_on_bubble)
+	Net.npc_chat.connect(_on_npc_chat)
+	Net.clock_tick.connect(_on_clock)
+	Net.world_event.connect(_on_world_event)
+	Net.toast.connect(_on_toast)
+	Net.quests.connect(_on_quests)
+	if not Net.is_online():
+		_toast("还没连上后端，请先在 backend 目录运行 python main.py")
+	if OS.get_environment("AITOWN_AUTOTEST") != "":
+		_autotest()
 
-func _process(delta: float):
-	# 定时更新NPC状态
-	status_update_timer += delta
-	if status_update_timer >= Config.NPC_STATUS_UPDATE_INTERVAL:
-		status_update_timer = 0.0
-		if api_client:
-			api_client.get_npc_status()
+func _process(delta: float) -> void:
+	if _toast_timer > 0.0:
+		_toast_timer -= delta
+		if _toast_timer <= 0.0 and toast_label:
+			toast_label.visible = false
 
-func _on_npc_status_received(dialogues: Dictionary):
-	"""收到NPC状态更新"""
-	print("[INFO] 更新NPC状态: ", dialogues)
-	
-	# 更新各个NPC的对话
-	for npc_name in dialogues:
-		var dialogue = dialogues[npc_name]
-		update_npc_dialogue(npc_name, dialogue)
+# ---------- HUD ----------
+func _build_hud() -> void:
+	hud = Control.new()
+	hud.name = "HUD"
+	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(hud)
 
-func update_npc_dialogue(npc_name: String, dialogue: String):
-	"""更新指定NPC的对话"""
-	var npc_node = get_npc_node(npc_name)
-	if npc_node and npc_node.has_method("update_dialogue"):
-		npc_node.update_dialogue(dialogue)
+	var box := PanelContainer.new()
+	box.position = Vector2(16, 12)
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(1, 0.99, 0.96, 0.85)
+	st.set_corner_radius_all(10)
+	st.set_content_margin_all(10)
+	box.add_theme_stylebox_override("panel", st)
+	hud.add_child(box)
+	var col := VBoxContainer.new()
+	box.add_child(col)
+	clock_label = Label.new()
+	clock_label.add_theme_font_size_override("font_size", 16)
+	col.add_child(clock_label)
+	event_label = Label.new()
+	event_label.add_theme_font_size_override("font_size", 13)
+	event_label.add_theme_color_override("font_color", Color(0.72, 0.33, 0.09))
+	col.add_child(event_label)
 
-func get_npc_node(npc_name: String) -> Node2D:
-	"""根据名字获取NPC节点"""
-	match npc_name:
-		"张三":
-			return npc_zhang
-		"李四":
-			return npc_li
-		"王五":
-			return npc_wang
-		_:
-			return null
+	var qbox := PanelContainer.new()
+	qbox.position = Vector2(16, 108)
+	var st2 := StyleBoxFlat.new()
+	st2.bg_color = Color(1, 0.99, 0.96, 0.85)
+	st2.set_corner_radius_all(10)
+	st2.set_content_margin_all(10)
+	qbox.add_theme_stylebox_override("panel", st2)
+	hud.add_child(qbox)
+	quest_box = VBoxContainer.new()
+	qbox.add_child(quest_box)
+
+	toast_label = Label.new()
+	toast_label.position = Vector2(0, 0)
+	toast_label.anchor_left = 0.5
+	toast_label.anchor_right = 0.5
+	toast_label.offset_left = -300
+	toast_label.offset_right = 300
+	toast_label.offset_top = 620
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_label.add_theme_font_size_override("font_size", 17)
+	toast_label.add_theme_color_override("font_color", Color(0.09, 0.42, 0.09))
+	toast_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.9))
+	toast_label.add_theme_constant_override("outline_size", 8)
+	toast_label.visible = false
+	hud.add_child(toast_label)
+
+func _toast(text: String) -> void:
+	if text.strip_edges() == "":
+		return
+	toast_label.text = text
+	toast_label.visible = true
+	_toast_timer = 5.0
+
+# ---------- 生成 NPC ----------
+func _on_welcome(list: Array, clock: Dictionary, event: String) -> void:
+	_spawn_npcs(list)
+	_on_clock(clock)
+	event_label.text = ("正在发生：" + event) if event != "" else ""
+
+func _spawn_npcs(list: Array) -> void:
+	for child in npc_root.get_children():
+		child.queue_free()
+	npcs.clear()
+	for info in list:
+		var npc: Node = NPC_SCENE.instantiate()
+		npc_root.add_child(npc)
+		npc.global_position = WorldMap.point(str(info.get("spawn", "走廊")))
+		npc.setup(info)
+		npcs[str(info.get("id", ""))] = npc
+	print("[INFO] 生成了 %d 个 NPC" % npcs.size())
+
+func _npc(npc_id: String) -> Node:
+	if npcs.has(npc_id):
+		var n = npcs[npc_id]
+		if is_instance_valid(n):
+			return n
+	return null
+
+# ---------- 后端推送 ----------
+func _on_npc_move(data: Dictionary) -> void:
+	var n := _npc(str(data.get("npc_id", "")))
+	if n == null:
+		return
+	print("[INFO] ", n.npc_name, " 前往 ", data.get("location", ""), "（", data.get("reason", ""), "）")
+	n.goto_place(str(data.get("location", "走廊")))
+	if str(data.get("activity", "")) != "":
+		n.behavior["activity"] = data["activity"]
+
+func _on_bubble(data: Dictionary) -> void:
+	var n := _npc(str(data.get("npc_id", "")))
+	if n == null:
+		return
+	var kind := str(data.get("kind", ""))
+	print("[INFO] ", n.npc_name, " 气泡(", kind, ")：", data.get("text", ""))
+	n.show_bubble(str(data.get("text", "")), 8.0 if kind != "monologue" else 6.0)
+
+func _on_npc_chat(data: Dictionary) -> void:
+	print("[INFO] NPC 互聊（", data.get("location", ""), "）：", data.get("lines", []))
+	# 两个人的对话依次冒泡，间隔 2.2 秒
+	var delay := 0.0
+	for line in data.get("lines", []):
+		var speaker := str(line.get("speaker", ""))
+		var text := str(line.get("line", ""))
+		var target := _find_by_name(speaker)
+		if target == null:
+			continue
+		var t := get_tree().create_timer(delay)
+		t.timeout.connect(func(): if is_instance_valid(target): target.show_bubble(text, 4.0))
+		delay += 2.2
+
+func _find_by_name(name: String) -> Node:
+	for n in npcs.values():
+		if is_instance_valid(n) and n.npc_name == name:
+			return n
+	return null
+
+func _on_clock(data: Dictionary) -> void:
+	clock_label.text = "%s 第%d天  %s  %s%s" % [
+		data.get("date", ""), int(data.get("day", 1)), data.get("time", ""),
+		data.get("segment", ""), "（已暂停）" if data.get("paused", false) else ""]
+
+func _on_world_event(data: Dictionary) -> void:
+	event_label.text = "正在发生：" + str(data.get("content", ""))
+	_toast("小镇事件：" + str(data.get("content", "")))
+
+func _on_toast(text: String) -> void:
+	print("[INFO] 提示：", text)
+	_toast(text)
+
+func _on_quests(list: Array) -> void:
+	for c in quest_box.get_children():
+		c.queue_free()
+	if list.is_empty():
+		return
+	var head := Label.new()
+	head.text = "委托"
+	head.add_theme_font_size_override("font_size", 13)
+	head.add_theme_color_override("font_color", Color(0.42, 0.4, 0.36))
+	quest_box.add_child(head)
+	for q in list:
+		var l := Label.new()
+		l.text = "· " + str(q.get("content", ""))
+		l.add_theme_font_size_override("font_size", 13)
+		quest_box.add_child(l)
+
+
+# ---------- 自检（AITOWN_AUTOTEST=1 时自动跑一遍对话，方便无界面验证） ----------
+func _autotest() -> void:
+	print("[TEST] 等后端推送 NPC…")
+	for i in 300:
+		await get_tree().process_frame
+		if npcs.size() > 0:
+			break
+	if npcs.is_empty():
+		print("[TEST] 失败：没有 NPC（后端没连上？）")
+		get_tree().quit(1)
+		return
+	var npc: Node = npcs.values()[0]
+	print("[TEST] NPC=", npc.npc_name, " 位置=", npc.place, " 贴图=", npc.get_meta("sprite", "-"))
+	dialogue.start_dialogue(npc)
+	print("[TEST] 对话框已打开=", dialogue.visible, " 标题=", dialogue.title_label.text)
+	dialogue.input.text = "你好，我叫Lance，今天想跟你聊聊天"
+	dialogue._send()
+	for i in 1800:
+		await get_tree().process_frame
+		if dialogue.waiting == false and dialogue._pending == false and dialogue.body.get_parsed_text().length() > 30:
+			break
+	var text: String = dialogue.body.get_parsed_text()
+	print("[TEST] 对话正文长度=", text.length())
+	print("[TEST] 对话正文=", text.substr(0, 260).replace("\n", " | "))
+	print("[TEST] 好感度=", int(dialogue.aff_bar.value), " (", dialogue.aff_label.text, ") 情绪=", npc.emotion)
+	print("[TEST] 快捷选项按钮=", dialogue.quick_box.get_child_count(), " 背包=", dialogue.inventory.size())
+	var before: int = dialogue.body.get_parsed_text().length()
+	Net.gift(npc.npc_id, "蛋糕")
+	for i in 1200:
+		await get_tree().process_frame
+		if dialogue._pending == false and dialogue.body.get_parsed_text().length() > before:
+			break
+	print("[TEST] 送礼后正文尾=", dialogue.body.get_parsed_text().right(60).replace("\n", " | "))
+	print("[TEST] 全部通过")
+	get_tree().quit(0)

@@ -400,24 +400,6 @@ position = Vector2(453, 492)
 
 [node name="NPCs" type="Node2D" parent="."]
 
-[node name="NPC_Zhang" parent="NPCs" instance=ExtResource("3_jyhfs")]
-position = Vector2(367, 172)
-
-[node name="NPC_Li" parent="NPCs" instance=ExtResource("3_jyhfs")]
-position = Vector2(1071, 164)
-npc_name = "李四"
-npc_title = "产品经理"
-sprite_frames = SubResource("SpriteFrames_tbgi4")
-move_speed = 20.0
-
-[node name="NPC_Wang" parent="NPCs" instance=ExtResource("3_jyhfs")]
-z_index = 1
-position = Vector2(206, 423)
-npc_name = "王五"
-npc_title = "UI设计师"
-sprite_frames = SubResource("SpriteFrames_dp3eg")
-wander_range = 0.0
-
 [node name="DialogueUI" parent="." instance=ExtResource("5_tefeu")]
 
 [node name="Walls" type="Node2D" parent="."]
