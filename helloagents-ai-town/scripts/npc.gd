@@ -68,14 +68,17 @@ func _style_bubble() -> void:
 func _build_hint() -> void:
 	hint_label = Label.new()
 	hint_label.name = "HintLabel"
-	hint_label.size = Vector2(200, 34)
-	hint_label.position = Vector2(-100, 34)
 	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	hint_label.add_theme_font_size_override("font_size", 18)
+	hint_label.add_theme_font_size_override("font_size", 19)
 	hint_label.add_theme_color_override("font_color", Color(1, 1, 1))
-	hint_label.add_theme_color_override("font_outline_color", Color(0.1, 0.25, 0.45, 0.95))
-	hint_label.add_theme_constant_override("outline_size", 8)
+	var hint_box := StyleBoxFlat.new()
+	hint_box.bg_color = Color(0.10, 0.30, 0.55, 0.92)
+	hint_box.set_corner_radius_all(10)
+	hint_box.set_content_margin_all(4)
+	hint_label.add_theme_stylebox_override("normal", hint_box)
+	hint_label.size = Vector2(150, 32)
+	hint_label.position = Vector2(-75, 30)
 	hint_label.text = "按 E 说话"
 	hint_label.visible = false
 	add_child(hint_label)

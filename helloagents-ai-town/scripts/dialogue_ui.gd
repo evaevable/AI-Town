@@ -10,6 +10,8 @@ const FONT_TITLE := 26
 const FONT_TEXT := 22
 const FONT_SMALL := 17
 const FONT_INPUT := 20
+const INK := Color(0.13, 0.13, 0.12)      # 浅底上的正文色
+const MUTED := Color(0.42, 0.40, 0.36)
 
 var current: Node = null
 var inventory: Array = []
@@ -46,6 +48,21 @@ func _mk_button(text: String, size: int = FONT_SMALL, h: int = 44) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", size)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		b.add_theme_color_override(state, INK)
+	b.add_theme_color_override("font_disabled_color", Color(0.62, 0.6, 0.57))
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.98, 0.975, 0.96)
+	st.border_color = Color(0.72, 0.70, 0.65)
+	st.set_border_width_all(1)
+	st.set_corner_radius_all(8)
+	st.set_content_margin_all(8)
+	var st_hover: StyleBoxFlat = st.duplicate()
+	st_hover.bg_color = Color(0.93, 0.95, 0.98)
+	b.add_theme_stylebox_override("normal", st)
+	b.add_theme_stylebox_override("hover", st_hover)
+	b.add_theme_stylebox_override("pressed", st_hover)
+	b.add_theme_stylebox_override("disabled", st)
 	b.custom_minimum_size = Vector2(0, h)
 	return b
 
@@ -85,10 +102,11 @@ func _build_ui() -> void:
 	col.add_child(head)
 	title_label = Label.new()
 	title_label.add_theme_font_size_override("font_size", FONT_TITLE)
+	title_label.add_theme_color_override("font_color", INK)
 	head.add_child(title_label)
 	mood_label = Label.new()
 	mood_label.add_theme_font_size_override("font_size", FONT_SMALL)
-	mood_label.add_theme_color_override("font_color", Color(0.42, 0.40, 0.36))
+	mood_label.add_theme_color_override("font_color", MUTED)
 	mood_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	head.add_child(mood_label)
 	var spacer := Control.new()
@@ -102,6 +120,7 @@ func _build_ui() -> void:
 	head.add_child(aff_bar)
 	aff_label = Label.new()
 	aff_label.add_theme_font_size_override("font_size", FONT_SMALL)
+	aff_label.add_theme_color_override("font_color", INK)
 	aff_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	head.add_child(aff_label)
 
@@ -116,6 +135,8 @@ func _build_ui() -> void:
 	body = RichTextLabel.new()
 	body.bbcode_enabled = true
 	body.scroll_following = true
+	body.add_theme_color_override("default_color", INK)
+	body.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0))
 	body.add_theme_font_size_override("normal_font_size", FONT_TEXT)
 	body.add_theme_font_size_override("bold_font_size", FONT_TEXT)
 	body.add_theme_constant_override("line_separation", 6)
@@ -132,6 +153,8 @@ func _build_ui() -> void:
 	input = LineEdit.new()
 	input.placeholder_text = "说点什么…（回车发送）"
 	input.add_theme_font_size_override("font_size", FONT_INPUT)
+	input.add_theme_color_override("font_color", INK)
+	input.add_theme_color_override("font_placeholder_color", Color(0.55, 0.53, 0.5))
 	input.custom_minimum_size = Vector2(0, 46)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(input)
@@ -177,7 +200,7 @@ func start_dialogue(npc) -> void:
 	title_label.text = "%s · %s" % [npc.npc_name, npc.npc_title]
 	mood_label.text = "心情 " + str(npc.behavior.get("mood", ""))
 	body.clear()
-	body.append_text("[color=#8a8780]—— 和 %s 的对话（记忆会一直留着，可以随时回来接着聊）——[/color]\n" % npc.npc_name)
+	body.append_text("[color=#6b6a66]—— 和 %s 的对话（记忆会一直留着，可以随时回来接着聊）——[/color]\n" % npc.npc_name)
 	_clear_quick()
 	visible = true
 	input.grab_focus()
@@ -212,7 +235,7 @@ func _send() -> void:
 		return
 	input.text = ""
 	body.append_text("\n[color=#1d6fa5][b]你[/b][/color]  " + text + "\n")
-	body.append_text("[color=#b0aca4]%s 在想…[/color]" % current.npc_name)
+	body.append_text("[color=#8a8780]%s 在想…[/color]" % current.npc_name)
 	_pending = true
 	_set_waiting(true)
 	Net.say(current.npc_id, text)
@@ -286,7 +309,7 @@ func _on_gift_id(id: int) -> void:
 	if current == null or id < 0 or id >= inventory.size():
 		return
 	var item := str(inventory[id].item)
-	body.append_text("\n[color=#8a8780]你送出了 %s…[/color]\n" % item)
+	body.append_text("\n[color=#6b6a66]你送出了 %s…[/color]\n" % item)
 	_pending = true
 	_set_waiting(true)
 	Net.gift(current.npc_id, item)

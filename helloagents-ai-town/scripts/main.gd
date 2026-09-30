@@ -66,6 +66,7 @@ func _build_hud() -> void:
 	box.add_child(col)
 	clock_label = Label.new()
 	clock_label.add_theme_font_size_override("font_size", 19)
+	clock_label.add_theme_color_override("font_color", Color(0.15, 0.15, 0.14))
 	col.add_child(clock_label)
 	event_label = Label.new()
 	event_label.add_theme_font_size_override("font_size", 16)
