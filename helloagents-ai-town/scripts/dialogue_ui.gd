@@ -1,9 +1,20 @@
 # 对话界面：流式打字效果、快捷回复、送礼、好感度条、情绪与心情。
+# 布局（1280x720 窗口）：打开时整屏压暗，底部居中放 1200x430 的大面板
+#   [名字 26px + 心情]                      [好感度条 260x18 + 等级]
+#   [正文 22px 可滚动，至少 210px 高，浅底圆角]
+#   [快捷回复按钮 17px]
+#   [输入框 20px/46 高] [发送] [送礼] [离开]
 extends CanvasLayer
 
-var current: Node = null              # 当前对话的 NPC
+const FONT_TITLE := 26
+const FONT_TEXT := 22
+const FONT_SMALL := 17
+const FONT_INPUT := 20
+
+var current: Node = null
 var inventory: Array = []
 
+var backdrop: ColorRect
 var panel: PanelContainer
 var title_label: Label
 var aff_bar: ProgressBar
@@ -17,7 +28,7 @@ var gift_btn: Button
 var close_btn: Button
 var gift_menu: PopupMenu
 var waiting := false
-var _pending := false   # 已经发出请求，正在等这一轮的回复（防止并发串台）
+var _pending := false   # 已发出请求、正在等这一轮回复（防止并发串台）
 
 func _ready() -> void:
 	add_to_group("dialogue_system")
@@ -31,86 +42,118 @@ func _ready() -> void:
 	Net.inventory.connect(_on_inventory)
 	Net.toast.connect(_on_toast)
 
+func _mk_button(text: String, size: int = FONT_SMALL, h: int = 44) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.add_theme_font_size_override("font_size", size)
+	b.custom_minimum_size = Vector2(0, h)
+	return b
+
 func _build_ui() -> void:
+	backdrop = ColorRect.new()
+	backdrop.name = "Backdrop"
+	backdrop.color = Color(0.05, 0.05, 0.07, 0.45)
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(backdrop)
+
 	panel = PanelContainer.new()
 	panel.name = "Panel"
 	panel.anchor_left = 0.5
 	panel.anchor_right = 0.5
 	panel.anchor_top = 1.0
 	panel.anchor_bottom = 1.0
-	panel.offset_left = -470
-	panel.offset_right = 470
-	panel.offset_top = -330
+	panel.offset_left = -600
+	panel.offset_right = 600
+	panel.offset_top = -450
 	panel.offset_bottom = -20
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(1, 0.99, 0.96, 0.97)
-	style.border_color = Color(0.78, 0.76, 0.71)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(12)
-	style.set_content_margin_all(14)
+	style.bg_color = Color(1, 0.995, 0.98, 0.98)
+	style.border_color = Color(0.72, 0.70, 0.65)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(16)
+	style.set_content_margin_all(20)
 	panel.add_theme_stylebox_override("panel", style)
 	add_child(panel)
 
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 8)
+	col.add_theme_constant_override("separation", 12)
 	panel.add_child(col)
 
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 10)
+	head.add_theme_constant_override("separation", 14)
 	col.add_child(head)
 	title_label = Label.new()
-	title_label.add_theme_font_size_override("font_size", 18)
+	title_label.add_theme_font_size_override("font_size", FONT_TITLE)
 	head.add_child(title_label)
 	mood_label = Label.new()
-	mood_label.add_theme_font_size_override("font_size", 13)
+	mood_label.add_theme_font_size_override("font_size", FONT_SMALL)
+	mood_label.add_theme_color_override("font_color", Color(0.42, 0.40, 0.36))
+	mood_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
 	head.add_child(mood_label)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(spacer)
 	aff_bar = ProgressBar.new()
-	aff_bar.custom_minimum_size = Vector2(180, 16)
+	aff_bar.custom_minimum_size = Vector2(260, 18)
 	aff_bar.max_value = 100
 	aff_bar.show_percentage = false
+	aff_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	head.add_child(aff_bar)
 	aff_label = Label.new()
-	aff_label.add_theme_font_size_override("font_size", 13)
+	aff_label.add_theme_font_size_override("font_size", FONT_SMALL)
+	aff_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	head.add_child(aff_label)
 
+	var body_panel := PanelContainer.new()
+	var bst := StyleBoxFlat.new()
+	bst.bg_color = Color(0.965, 0.958, 0.94, 1.0)
+	bst.set_corner_radius_all(12)
+	bst.set_content_margin_all(14)
+	body_panel.add_theme_stylebox_override("panel", bst)
+	body_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_child(body_panel)
 	body = RichTextLabel.new()
 	body.bbcode_enabled = true
 	body.scroll_following = true
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.custom_minimum_size = Vector2(0, 150)
-	col.add_child(body)
+	body.add_theme_font_size_override("normal_font_size", FONT_TEXT)
+	body.add_theme_font_size_override("bold_font_size", FONT_TEXT)
+	body.add_theme_constant_override("line_separation", 6)
+	body.custom_minimum_size = Vector2(0, 210)
+	body_panel.add_child(body)
 
 	quick_box = HBoxContainer.new()
-	quick_box.add_theme_constant_override("separation", 6)
+	quick_box.add_theme_constant_override("separation", 10)
 	col.add_child(quick_box)
 
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
+	row.add_theme_constant_override("separation", 10)
 	col.add_child(row)
 	input = LineEdit.new()
 	input.placeholder_text = "说点什么…（回车发送）"
+	input.add_theme_font_size_override("font_size", FONT_INPUT)
+	input.custom_minimum_size = Vector2(0, 46)
 	input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(input)
-	send_btn = Button.new()
-	send_btn.text = "发送"
+	send_btn = _mk_button("发送", FONT_INPUT, 46)
+	send_btn.custom_minimum_size = Vector2(96, 46)
 	row.add_child(send_btn)
-	gift_btn = Button.new()
-	gift_btn.text = "送礼"
+	gift_btn = _mk_button("送礼", FONT_INPUT, 46)
+	gift_btn.custom_minimum_size = Vector2(96, 46)
 	row.add_child(gift_btn)
-	close_btn = Button.new()
-	close_btn.text = "离开 (ESC)"
+	close_btn = _mk_button("离开 (ESC)", FONT_INPUT, 46)
+	close_btn.custom_minimum_size = Vector2(150, 46)
 	row.add_child(close_btn)
 
 	gift_menu = PopupMenu.new()
+	gift_menu.add_theme_font_size_override("font_size", FONT_SMALL)
 	add_child(gift_menu)
 
 	send_btn.pressed.connect(_send)
 	input.text_submitted.connect(func(_t): _send())
 	gift_btn.pressed.connect(_open_gift_menu)
 	gift_menu.id_pressed.connect(_on_gift_id)
+	close_btn.pressed.connect(close_dialogue)
 
 func _input(event: InputEvent) -> void:
 	if not visible:
@@ -123,7 +166,6 @@ func _input(event: InputEvent) -> void:
 			if not input.has_focus() and event.keycode != KEY_SPACE:
 				get_viewport().set_input_as_handled()
 
-# ---------- 开关 ----------
 func start_dialogue(npc) -> void:
 	if typeof(npc) == TYPE_STRING:
 		npc = _find_npc(str(npc))
@@ -132,10 +174,10 @@ func start_dialogue(npc) -> void:
 	current = npc
 	if npc.has_method("set_interacting"):
 		npc.set_interacting(true)
-	title_label.text = "%s  ·  %s" % [npc.npc_name, npc.npc_title]
+	title_label.text = "%s · %s" % [npc.npc_name, npc.npc_title]
 	mood_label.text = "心情 " + str(npc.behavior.get("mood", ""))
 	body.clear()
-	body.append_text("[color=#8a8780]—— 和 %s 的对话（现在的记忆会一直留着）——[/color]\n" % npc.npc_name)
+	body.append_text("[color=#8a8780]—— 和 %s 的对话（记忆会一直留着，可以随时回来接着聊）——[/color]\n" % npc.npc_name)
 	_clear_quick()
 	visible = true
 	input.grab_focus()
@@ -162,7 +204,6 @@ func _find_npc(npc_name: String) -> Node:
 			return n
 	return null
 
-# ---------- 发送 ----------
 func _send() -> void:
 	if current == null or waiting:
 		return
@@ -185,11 +226,9 @@ func _clear_quick() -> void:
 	for c in quick_box.get_children():
 		c.queue_free()
 
-# ---------- 后端事件 ----------
 func _on_chat_start(data: Dictionary) -> void:
 	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
 		return
-	# 去掉"在想…"占位
 	var plain := body.get_parsed_text()
 	if plain.ends_with("在想…"):
 		body.clear()
@@ -221,13 +260,11 @@ func _on_chat_end(data: Dictionary) -> void:
 	body.append_text("\n")
 	aff_bar.value = float(data.get("affinity", 0))
 	var change := float(data.get("affinity_change", 0))
-	aff_label.text = "%s %d  %s" % [data.get("level", ""), int(aff_bar.value),
-		("+%d" % int(change)) if change > 0 else ("%d" % int(change) if change < 0 else "")]
+	var delta_text := ("+%d" % int(change)) if change > 0 else ("%d" % int(change) if change < 0 else "")
+	aff_label.text = "%s  %d/100  %s" % [data.get("level", ""), int(aff_bar.value), delta_text]
 	current.set_emotion(str(data.get("emotion", "")))
 	for opt in data.get("reply_options", []):
-		var b := Button.new()
-		b.text = str(opt)
-		b.add_theme_font_size_override("font_size", 12)
+		var b := _mk_button(str(opt), FONT_SMALL, 40)
 		b.pressed.connect(func():
 			input.text = b.text
 			_send())
@@ -262,7 +299,7 @@ func _on_gift_result(data: Dictionary) -> void:
 	body.append_text("[color=#b0781a][b]%s[/b][/color]  %s\n" % [current.npc_name, data.get("text", "")])
 	aff_bar.value = float(data.get("affinity", aff_bar.value))
 	var change := float(data.get("affinity_change", 0))
-	aff_label.text = "%s %d  %s" % [data.get("level", ""), int(aff_bar.value),
+	aff_label.text = "%s  %d/100  %s" % [data.get("level", ""), int(aff_bar.value),
 		("+%d" % int(change)) if change > 0 else "%d" % int(change)]
 	current.set_emotion("开心" if data.get("liked") else ("难过" if data.get("disliked") else ""))
 

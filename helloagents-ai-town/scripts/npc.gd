@@ -37,16 +37,39 @@ func _ready() -> void:
 	dialogue_label.visible = false
 	interaction_area.body_entered.connect(_on_body_entered)
 	interaction_area.body_exited.connect(_on_body_exited)
+	_style_bubble()
 	_build_emotion_label()
 	if animated_sprite.sprite_frames and animated_sprite.sprite_frames.has_animation(_idle_anim):
 		animated_sprite.play(_idle_anim)
 
+func _style_bubble() -> void:
+	"""头顶台词气泡：白底圆角 + 大字号 + 自动换行，方便看清。"""
+	dialogue_label.size = Vector2(300, 64)
+	dialogue_label.position = Vector2(-150, -212)
+	dialogue_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dialogue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	dialogue_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	dialogue_label.add_theme_font_size_override("font_size", 17)
+	dialogue_label.add_theme_color_override("font_color", Color(0.17, 0.16, 0.15))
+	var box := StyleBoxFlat.new()
+	box.bg_color = Color(1, 1, 1, 0.94)
+	box.border_color = Color(0.78, 0.76, 0.71)
+	box.set_border_width_all(1)
+	box.set_corner_radius_all(10)
+	box.set_content_margin_all(9)
+	dialogue_label.add_theme_stylebox_override("normal", box)
+	name_label.add_theme_font_size_override("font_size", 16)
+	name_label.add_theme_color_override("font_color", Color(0.15, 0.22, 0.35))
+	name_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.9))
+	name_label.add_theme_constant_override("outline_size", 6)
+
 func _build_emotion_label() -> void:
 	emotion_label = Label.new()
 	emotion_label.name = "EmotionLabel"
-	emotion_label.position = Vector2(-40, -112)
-	emotion_label.size = Vector2(96, 26)
+	emotion_label.position = Vector2(-60, -252)
+	emotion_label.size = Vector2(120, 30)
 	emotion_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	emotion_label.add_theme_font_size_override("font_size", 19)
 	emotion_label.add_theme_color_override("font_color", Color(0.93, 0.42, 0.6))
 	emotion_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.9))
 	emotion_label.add_theme_constant_override("outline_size", 7)

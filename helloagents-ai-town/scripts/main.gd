@@ -59,10 +59,10 @@ func _build_hud() -> void:
 	var col := VBoxContainer.new()
 	box.add_child(col)
 	clock_label = Label.new()
-	clock_label.add_theme_font_size_override("font_size", 16)
+	clock_label.add_theme_font_size_override("font_size", 19)
 	col.add_child(clock_label)
 	event_label = Label.new()
-	event_label.add_theme_font_size_override("font_size", 13)
+	event_label.add_theme_font_size_override("font_size", 16)
 	event_label.add_theme_color_override("font_color", Color(0.72, 0.33, 0.09))
 	col.add_child(event_label)
 
@@ -85,7 +85,7 @@ func _build_hud() -> void:
 	toast_label.offset_right = 300
 	toast_label.offset_top = 620
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	toast_label.add_theme_font_size_override("font_size", 17)
+	toast_label.add_theme_font_size_override("font_size", 22)
 	toast_label.add_theme_color_override("font_color", Color(0.09, 0.42, 0.09))
 	toast_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.9))
 	toast_label.add_theme_constant_override("outline_size", 8)
@@ -185,13 +185,13 @@ func _on_quests(list: Array) -> void:
 		return
 	var head := Label.new()
 	head.text = "委托"
-	head.add_theme_font_size_override("font_size", 13)
+	head.add_theme_font_size_override("font_size", 15)
 	head.add_theme_color_override("font_color", Color(0.42, 0.4, 0.36))
 	quest_box.add_child(head)
 	for q in list:
 		var l := Label.new()
 		l.text = "· " + str(q.get("content", ""))
-		l.add_theme_font_size_override("font_size", 13)
+		l.add_theme_font_size_override("font_size", 15)
 		quest_box.add_child(l)
 
 
