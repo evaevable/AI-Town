@@ -29,6 +29,9 @@ func _ready() -> void:
 	Net.quests.connect(_on_quests)
 	if not Net.is_online():
 		_toast("还没连上后端，请先在 backend 目录运行 python main.py")
+	_toast("用 WASD 走到 NPC 旁边，按 E 跟他说话")
+	await get_tree().create_timer(9.0).timeout
+	_toast("对话框里可以直接打字，也可以点他给出的快捷回复")
 	if OS.get_environment("AITOWN_WALKTEST") != "":
 		_walktest()
 	elif OS.get_environment("AITOWN_AUTOTEST") != "":
@@ -76,6 +79,33 @@ func _build_hud() -> void:
 	hud.add_child(qbox)
 	quest_box = VBoxContainer.new()
 	qbox.add_child(quest_box)
+
+	# 右上角：操作说明（常驻）
+	var help := PanelContainer.new()
+	help.anchor_left = 1.0
+	help.anchor_right = 1.0
+	help.offset_left = -330
+	help.offset_right = -16
+	help.offset_top = 12
+	var hst := StyleBoxFlat.new()
+	hst.bg_color = Color(1, 0.99, 0.96, 0.9)
+	hst.set_corner_radius_all(10)
+	hst.set_content_margin_all(12)
+	help.add_theme_stylebox_override("panel", hst)
+	hud.add_child(help)
+	var hcol := VBoxContainer.new()
+	hcol.add_theme_constant_override("separation", 4)
+	help.add_child(hcol)
+	for line in ["操作说明", "WASD / 方向键：走路", "走到 NPC 旁边按 E：说话",
+			"回车：发送　ESC：结束对话", "对话框「送礼」：把背包里的东西送给他"]:
+		var l := Label.new()
+		l.text = line
+		l.add_theme_font_size_override("font_size", 15 if line == "操作说明" else 14)
+		if line == "操作说明":
+			l.add_theme_color_override("font_color", Color(0.28, 0.27, 0.25))
+		else:
+			l.add_theme_color_override("font_color", Color(0.42, 0.40, 0.36))
+		hcol.add_child(l)
 
 	toast_label = Label.new()
 	toast_label.position = Vector2(0, 0)

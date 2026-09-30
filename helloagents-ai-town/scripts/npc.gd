@@ -16,6 +16,7 @@ var is_interacting: bool = false
 @onready var dialogue_label: Label = $DialogueLabel
 
 var emotion_label: Label
+var hint_label: Label
 var _path: Array = []
 var _walk_timer := 0.0
 var _bubble_timer := 0.0
@@ -39,6 +40,7 @@ func _ready() -> void:
 	interaction_area.body_exited.connect(_on_body_exited)
 	_style_bubble()
 	_build_emotion_label()
+	_build_hint()
 	if animated_sprite.sprite_frames and animated_sprite.sprite_frames.has_animation(_idle_anim):
 		animated_sprite.play(_idle_anim)
 
@@ -62,6 +64,21 @@ func _style_bubble() -> void:
 	name_label.add_theme_color_override("font_color", Color(0.15, 0.22, 0.35))
 	name_label.add_theme_color_override("font_outline_color", Color(1, 1, 1, 0.9))
 	name_label.add_theme_constant_override("outline_size", 6)
+
+func _build_hint() -> void:
+	hint_label = Label.new()
+	hint_label.name = "HintLabel"
+	hint_label.size = Vector2(200, 34)
+	hint_label.position = Vector2(-100, 34)
+	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hint_label.add_theme_font_size_override("font_size", 18)
+	hint_label.add_theme_color_override("font_color", Color(1, 1, 1))
+	hint_label.add_theme_color_override("font_outline_color", Color(0.1, 0.25, 0.45, 0.95))
+	hint_label.add_theme_constant_override("outline_size", 8)
+	hint_label.text = "按 E 说话"
+	hint_label.visible = false
+	add_child(hint_label)
 
 func _build_emotion_label() -> void:
 	emotion_label = Label.new()
@@ -127,6 +144,8 @@ func set_interacting(v: bool) -> void:
 	is_interacting = v
 	_path.clear()
 	velocity = Vector2.ZERO
+	if hint_label and hint_label.visible == v:
+		hint_label.visible = not v
 
 func place_name() -> String:
 	return place
@@ -211,8 +230,13 @@ func _on_body_entered(body: Node2D) -> void:
 	if body.is_in_group("player"):
 		if body.has_method("set_nearby_npc"):
 			body.set_nearby_npc(self)
+		if hint_label:
+			hint_label.visible = not is_interacting
 		Net.notify_near(npc_id)
 
 func _on_body_exited(body: Node2D) -> void:
-	if body.is_in_group("player") and body.has_method("set_nearby_npc"):
-		body.set_nearby_npc(null)
+	if body.is_in_group("player"):
+		if hint_label:
+			hint_label.visible = false
+		if body.has_method("set_nearby_npc"):
+			body.set_nearby_npc(null)
