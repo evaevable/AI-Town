@@ -39,6 +39,7 @@ async def lifespan(app: FastAPI):
     print("=" * 58 + "\n")
     yield
     await api.env.world.stop()
+    await api.env.dialogue.close()
     print("\n🛑 已关闭")
 
 

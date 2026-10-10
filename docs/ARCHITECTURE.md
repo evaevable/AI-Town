@@ -41,12 +41,12 @@ helloagents-ai-town/      Godot 4.5 客户端
 | 步骤 | 调用 | 玩家等多久 |
 |---|---|---|
 | 生成回复 | 1 次流式 | 首字，通常 1-3 秒 |
-| 好感度/重要性/情绪/记忆摘要/玩家档案/快捷选项 | 1 次 JSON（后台，与前一步串行但玩家已看到回复） | 不等 |
+| 好感度/重要性/情绪/记忆摘要/玩家档案/快捷选项 | 1 次 JSON（回复完成后结算） | 需要等判分结果，默认总时限12秒；界面显示计算中 |
 | 攒够重要性时的反思 | 约每 10 轮 1 次 | 不等 |
 | 独白 | 每 90 游戏分钟，所有 NPC 合并成 1 次 | 不等 |
 | NPC 互聊 | 相遇时 1 次，生成整段对话 | 不等 |
 
-即：玩家说一句话 = 2 次模型调用，其中只有 1 次在关键路径上。
+回复与判分是两次模型调用：正文可以先看到，但判分完成前发送按钮仍等待，不能说第二次完全不在关键路径。反思和委托现已移出判分等待链路，生成后独立推送。背景请求最多占 N-1 个并发槽（N>1时），为聊天/判分留一个槽；详细日志记录排队、模型token和各阶段毫秒耗时。分析超时不伪造加分，保存原文并保留现有关系。当前 echo-2.2.2 通过 `chat_template_kwargs.enable_thinking=false` 禁用判分长思考；设 `ANALYSIS_DISABLE_THINKING=0` 可恢复或适配不支持此参数的模型。模型服务负载仍会造成数秒波动，不能保证瞬时结算。
 
 ## WebSocket 协议（`ws://127.0.0.1:8010/ws`）
 
@@ -67,7 +67,8 @@ helloagents-ai-town/      Godot 4.5 客户端
 | `chat_start` | 本轮开始，含检索到的记忆摘要 |
 | `chat_delta` | 流式文本片段 |
 | `chat_replace` | 检测到复读时整句替换 |
-| `chat_end` | 本轮结束：affinity/affinity_change/level/emotion/importance/memory/reply_options/actions |
+| `chat_reply_done` | 正文已完成，接下来计算好感度；尚未判分 |
+| `chat_end` | 本轮结算：affinity/affinity_change/level/emotion/importance/memory/reply_options/reason/analysis_ok/timings |
 | `gift_result` | 送礼结果：text/affinity/liked |
 | `inventory` / `quests` | 背包 / 委托变化 |
 | `bubble` | 头顶气泡（kind: monologue/director/greet） |

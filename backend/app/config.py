@@ -24,6 +24,8 @@ class Settings:
     LLM_TIMEOUT = float(_env("LLM_TIMEOUT", "60"))
     LLM_MOCK = _env("LLM_MOCK", "0") == "1" or not _env("LLM_BASE_URL", "x")
     LLM_MAX_CONCURRENCY = int(_env("LLM_MAX_CONCURRENCY", "4"))
+    ANALYSIS_TIMEOUT = float(_env("ANALYSIS_TIMEOUT", "12"))
+    ANALYSIS_DISABLE_THINKING = _env("ANALYSIS_DISABLE_THINKING", "1") == "1"
 
     # 数据
     DATA_DIR = Path(_env("DATA_DIR", str(BACKEND_DIR / "data")))

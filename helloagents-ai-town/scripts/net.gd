@@ -21,6 +21,7 @@ signal toast(text: String)
 signal chat_start(data: Dictionary)
 signal chat_delta(data: Dictionary)
 signal chat_replace(data: Dictionary)
+signal chat_reply_done(data: Dictionary)
 signal chat_end(data: Dictionary)
 signal gift_result(data: Dictionary)
 signal inventory(items: Array)
@@ -131,6 +132,8 @@ func _handle(text: String) -> void:
 			chat_delta.emit(data)
 		"chat_replace":
 			chat_replace.emit(data)
+		"chat_reply_done":
+			chat_reply_done.emit(data)
 		"chat_end":
 			chat_end.emit(data)
 		"gift_result":

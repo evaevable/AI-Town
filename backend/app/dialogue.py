@@ -1,5 +1,6 @@
 """对话引擎：一次流式回复 + 一次后台分析，负责好感度、记忆、档案、反思、委托。"""
 
+import asyncio
 import logging
 import random
 import time
@@ -24,6 +25,52 @@ class DialogueEngine:
         self.registry = registry
         self.llm = llm
         self.world = world  # world.World，用于取时间和事件
+        self._background: set[asyncio.Task] = set()
+        self._reflection_pending: set[tuple[str, str]] = set()
+        self._background_sem = asyncio.Semaphore(1)
+
+    async def close(self) -> None:
+        """关闭时取消后台任务，避免停服后还写数据库或调用模型。"""
+        tasks = list(self._background)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _schedule_followups(self, npc_id: str, player_id: str, message: str, reply: str,
+                            reflect: bool) -> None:
+        # 限制队列，不能让可选玩法积压占满模型请求。
+        if len(self._background) >= 8:
+            log.warning("可选后台任务已满，跳过 npc=%s", npc_id)
+            return
+        key = (npc_id, player_id)
+        should_reflect = reflect and key not in self._reflection_pending
+        if should_reflect:
+            self._reflection_pending.add(key)
+        task = asyncio.create_task(self._run_followups(npc_id, player_id, message, reply, should_reflect))
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def _run_followups(self, npc_id: str, player_id: str, message: str, reply: str,
+                            reflect: bool) -> None:
+        try:
+            async with self._background_sem:
+                if reflect:
+                    try:
+                        await asyncio.wait_for(self._reflect(npc_id, player_id), timeout=30)
+                    except Exception:
+                        log.exception("反思失败，不影响已结算的好感度 npc=%s", npc_id)
+                try:
+                    quest = await asyncio.wait_for(self._maybe_quest(npc_id, player_id, message, reply), timeout=30)
+                    if quest and self.world and self.world.broadcast:
+                        quests = self.db.query("SELECT * FROM quests WHERE player_id=? AND status='active' ORDER BY id DESC", (player_id,))
+                        await self.world.broadcast({"type": "quests", "quests": quests})
+                        await self.world.broadcast({"type": "toast", "text": f"新委托：{quest['content']}"})
+                except Exception:
+                    log.exception("委托生成失败，不影响已结算的好感度 npc=%s", npc_id)
+        finally:
+            if reflect:
+                self._reflection_pending.discard((npc_id, player_id))
 
     # ---------------- 上下文 ----------------
     def _player_name(self, npc_id: str, player_id: str) -> str:
@@ -71,6 +118,7 @@ class DialogueEngine:
 
     # ---------------- 聊天主流程 ----------------
     async def chat(self, npc_id: str, player_id: str, message: str) -> AsyncIterator[Dict[str, Any]]:
+        started = time.perf_counter()
         ctx = self.build_context(npc_id, player_id, message)
         npc = ctx["npc"]
         yield {"type": "chat_start", "npc_id": npc_id, "npc_name": npc["name"],
@@ -97,7 +145,7 @@ class DialogueEngine:
                     {"role": "assistant", "content": reply},
                     {"role": "user", "content": "（刚才那句和之前说过的太像了，换个角度、换句话再说一次，别重复。）"}]
                 reply2 = await self.llm.complete(retry_msgs, temperature=min(1.2, npc["temperature"] + 0.15),
-                                                 max_tokens=220)
+                                                 max_tokens=220, foreground=True)
                 if reply2 and similarity(reply2, last) < similarity(reply, last):
                     reply = reply2
                     yield {"type": "chat_replace", "npc_id": npc_id, "text": reply}
@@ -107,7 +155,16 @@ class DialogueEngine:
         self.store.add_turn(npc_id, player_id, "player", message)
         self.store.add_turn(npc_id, player_id, "npc", reply)
 
+        reply_finished = time.perf_counter()
+        # UI 明确区分“正文已到齐”和“正在结算关系”，不再把后台玩法算进等待。
+        yield {"type": "chat_reply_done", "npc_id": npc_id, "text": reply}
         meta = await self.analyze(npc_id, player_id, message, reply)
+        finished = time.perf_counter()
+        meta["timings"] = {"reply_ms": round((reply_finished - started) * 1000),
+                           "analysis_ms": round((finished - reply_finished) * 1000),
+                           "total_ms": round((finished - started) * 1000)}
+        log.info("chat latency npc=%s reply_ms=%s analysis_ms=%s", npc_id,
+                 meta["timings"]["reply_ms"], meta["timings"]["analysis_ms"])
         yield {"type": "chat_end", "npc_id": npc_id, "text": reply, **meta}
 
     async def analyze(self, npc_id: str, player_id: str, message: str, reply: str) -> Dict[str, Any]:
@@ -117,8 +174,21 @@ class DialogueEngine:
         mock = {"affinity_change": 2, "importance": 4, "emotion": "平静",
                 "memory": f"玩家说了「{message[:20]}」", "facts": [], "reply_options": ["嗯嗯", "然后呢？"],
                 "reason": "闲聊"}
-        data = await self.llm.complete_json(build_analysis_messages(npc["name"], message, reply, known),
-                                            mock_value=mock) or mock
+        data = None
+        try:
+            data = await asyncio.wait_for(
+                self.llm.complete_json(build_analysis_messages(npc["name"], message, reply, known),
+                                       mock_value=mock, foreground=True,
+                                       disable_thinking=settings.ANALYSIS_DISABLE_THINKING),
+                timeout=settings.ANALYSIS_TIMEOUT)
+        except Exception:
+            log.exception("对话分析超时或失败，保留关系不伪造加分 npc=%s", npc_id)
+        # 模型失败不应每次无条件+2：保留原文记忆和现有好感度，提示本轮未判分。
+        analysis_ok = isinstance(data, dict)
+        if not analysis_ok:
+            data = {"affinity_change": 0, "importance": 4, "emotion": "平静",
+                    "memory": f"玩家说：{message[:40]}｜我说：{reply[:40]}", "facts": [],
+                    "reply_options": [], "reason": "分析超时或失败"}
 
         importance = max(1.0, min(10.0, float(data.get("importance", 4))))
         delta = max(-15.0, min(8.0, float(data.get("affinity_change", 0))))
@@ -136,24 +206,18 @@ class DialogueEngine:
         level = self.registry.game.affinity_level(affinity)
         acc = self.store.bump_turn(npc_id, player_id, importance)
 
-        # 送礼类对话给更高权重，顺便标记
-        actions = []
-        if acc >= settings.REFLECT_IMPORTANCE_SUM:
-            reflection = await self._reflect(npc_id, player_id)
-            if reflection:
-                actions.append({"type": "reflection", "text": reflection})
-        quest = await self._maybe_quest(npc_id, player_id, message, reply)
-        if quest:
-            actions.append({"type": "quest", "quest": quest})
+        # 好感度已落库，立刻返回；反思和委托不再阻塞 chat_end。
+        self._schedule_followups(npc_id, player_id, message, reply,
+                                 reflect=acc >= settings.REFLECT_IMPORTANCE_SUM)
 
         return {
             "affinity": round(affinity, 1), "affinity_change": delta, "level": level["name"],
             "level_style": level["style"], "emotion": emotion, "importance": importance,
             "memory": memory_text, "episode_id": episode_id,
             "reason": str(data.get("reason", ""))[:12],
-            "reason": str(data.get("reason", ""))[:12],
+            "analysis_ok": analysis_ok,
             "reply_options": [str(o)[:16] for o in (data.get("reply_options") or [])][:3],
-            "actions": actions,
+            "actions": [],  # 新委托通过独立 quests/toast 事件推送。
         }
 
     async def _reflect(self, npc_id: str, player_id: str) -> Optional[str]:
@@ -161,12 +225,15 @@ class DialogueEngine:
         episodes = self.store.list_episodes(npc_id, player_id, limit=25)
         player_name = self._player_name(npc_id, player_id)
         mock = f"{player_name}最近经常来找我聊天，感觉关系在变好。"
+        accumulated = self.store.relation(npc_id, player_id)["importance_acc"]
         text = await self.llm.complete(build_reflection_messages(npc["name"], player_name, episodes,
                                                                  self.store.facts(npc_id, player_id)),
                                        temperature=0.6, max_tokens=160, mock_text=mock)
         if text:
             self.store.add_reflection(npc_id, player_id, text.strip())
-            self.store.reset_importance_acc(npc_id, player_id)
+            # 反思等待期间的新对话重要性要保留，不能直接清零吞掉。
+            self.db.execute("UPDATE relations SET importance_acc=MAX(0, importance_acc-?) "
+                            "WHERE npc_id=? AND player_id=?", (accumulated, npc_id, player_id))
             self.store.add_episode(npc_id, player_id, f"我整理了一下对{player_name}的印象：{text.strip()}",
                                    importance=8, kind="event")
         return text
@@ -221,7 +288,7 @@ class DialogueEngine:
         if self.llm.mock:
             line = f"（{npc['name']}）{'谢谢！这个我超喜欢！' if liked else '啊……谢谢。'}"
         else:
-            line = await self.llm.complete(prompt, temperature=npc["temperature"], max_tokens=80)
+            line = await self.llm.complete(prompt, temperature=npc["temperature"], max_tokens=80, foreground=True)
         affinity = self.store.change_affinity(npc_id, player_id, delta)
         level = self.registry.game.affinity_level(affinity)
         self.store.add_episode(npc_id, player_id, f"玩家送了我{item}，我{'很喜欢' if liked else ('不太喜欢' if disliked else '收下了')}",

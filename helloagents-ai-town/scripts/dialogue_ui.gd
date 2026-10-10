@@ -32,6 +32,7 @@ var send_btn: Button
 var gift_btn: Button
 var close_btn: Button
 var gift_menu: PopupMenu
+var analysis_status: Label
 var waiting := false
 var _pending := false   # 已发出请求、正在等这一轮回复（防止并发串台）
 var _ime_composing := false
@@ -89,6 +90,7 @@ func _ready() -> void:
 	Net.chat_start.connect(_on_chat_start)
 	Net.chat_delta.connect(_on_chat_delta)
 	Net.chat_replace.connect(_on_chat_replace)
+	Net.chat_reply_done.connect(_on_chat_reply_done)
 	Net.chat_end.connect(_on_chat_end)
 	Net.gift_result.connect(_on_gift_result)
 	Net.inventory.connect(_on_inventory)
@@ -202,6 +204,11 @@ func _build_ui() -> void:
 	quick_box = HBoxContainer.new()
 	quick_box.add_theme_constant_override("separation", 10)
 	col.add_child(quick_box)
+	analysis_status = Label.new()
+	analysis_status.add_theme_font_size_override("font_size", FONT_SMALL)
+	analysis_status.add_theme_color_override("font_color", MUTED)
+	analysis_status.visible = false
+	col.add_child(analysis_status)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
@@ -277,6 +284,7 @@ func close_dialogue() -> void:
 		current.set_interacting(false)
 	current = null
 	visible = false
+	analysis_status.visible = false
 	_reset_ime_guard()
 	var player := get_tree().get_first_node_in_group("player")
 	if player and player.has_method("set_interacting"):
@@ -298,6 +306,7 @@ func _send() -> void:
 	if text.is_empty():
 		return
 	input.text = ""
+	analysis_status.visible = false
 	body.append_text("\n[color=#1d6fa5][b]你[/b][/color]  " + text + "\n")
 	body.append_text("[color=#8a8780]%s 在想…[/color]" % current.npc_name)
 	_pending = true
@@ -340,10 +349,19 @@ func _on_chat_replace(data: Dictionary) -> void:
 		body.append_text(plain.substr(0, idx))
 	body.append_text("[color=#b0781a][b]%s[/b][/color]  %s" % [current.npc_name, str(data.get("text", ""))])
 
+func _on_chat_reply_done(data: Dictionary) -> void:
+	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
+		return
+	analysis_status.text = "回复已完成，正在计算本轮好感度…"
+	analysis_status.visible = true
+
 func _on_chat_end(data: Dictionary) -> void:
 	if current == null or not _pending or data.get("npc_id", "") != current.npc_id:
 		return
 	_pending = false
+	analysis_status.visible = false
+	if not data.get("analysis_ok", true):
+		body.append_text("\n[color=#6b6a66]本轮分析暂未完成，好感度保留，聊天原文已保存。[/color]")
 	body.append_text("\n")
 	aff_bar.value = float(data.get("affinity", 0))
 	var change := float(data.get("affinity_change", 0))

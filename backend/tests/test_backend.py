@@ -32,6 +32,118 @@ def env(tmp_path):
     set_db(None)  # type: ignore[arg-type]
 
 
+def test_affinity_returns_before_optional_followups(env, monkeypatch):
+    async def run():
+        held = asyncio.Event()
+        started = asyncio.Event()
+        async def slow_reflect(*args):
+            started.set()
+            await held.wait()
+        async def slow_quest(*args):
+            await held.wait()
+        monkeypatch.setattr(env.dialogue, "_reflect", slow_reflect)
+        monkeypatch.setattr(env.dialogue, "_maybe_quest", slow_quest)
+        env.store.bump_turn("qiqi", "player", 30)
+        events = []
+        async def collect():
+            async for event in env.dialogue.chat("qiqi", "player", "谢谢你的晚饭"):
+                events.append(event)
+        await asyncio.wait_for(collect(), timeout=1)
+        assert events[-1]["type"] == "chat_end"
+        assert "chat_reply_done" in [e["type"] for e in events]
+        assert events[-1]["affinity"] == 52
+        assert events[-1]["analysis_ok"] is True
+        assert "analysis_ms" in events[-1]["timings"]
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert env.dialogue._background
+        await env.dialogue.close()
+        assert not env.dialogue._reflection_pending
+    asyncio.run(run())
+
+
+def test_analysis_timeout_does_not_fake_affinity(env, monkeypatch):
+    async def run():
+        async def never_finishes(*args, **kwargs):
+            await asyncio.Event().wait()
+        monkeypatch.setattr(settings, "ANALYSIS_TIMEOUT", 0.02)
+        monkeypatch.setattr(env.llm, "complete_json", never_finishes)
+        metadata = await env.dialogue.analyze("qiqi", "player", "我叫Lance", "你好")
+        assert metadata["analysis_ok"] is False
+        assert metadata["affinity_change"] == 0
+        assert env.store.relation("qiqi", "player")["affinity"] == 50
+        assert env.store.list_episodes("qiqi", "player")
+        await env.dialogue.close()
+    asyncio.run(run())
+
+
+def test_async_quest_is_pushed_without_waiting_in_chat_end(env, monkeypatch):
+    async def run():
+        sent = []
+        async def broadcast(event):
+            sent.append(event)
+        async def quest(*args):
+            return {"content": "帮忙带句话"}
+        env.world.broadcast = broadcast
+        monkeypatch.setattr(env.dialogue, "_maybe_quest", quest)
+        await env.dialogue.analyze("qiqi", "player", "你好", "你好呀")
+        tasks = list(env.dialogue._background)
+        await asyncio.gather(*tasks)
+        assert [e["type"] for e in sent] == ["quests", "toast"]
+        await env.dialogue.close()
+    asyncio.run(run())
+
+
+def test_background_reflection_preserves_new_turn_importance(env, monkeypatch):
+    async def run():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        async def reflection_reply(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return "玩家很体贴。"
+        monkeypatch.setattr(env.llm, "complete", reflection_reply)
+        env.store.bump_turn("qiqi", "player", 35)
+        task = asyncio.create_task(env.dialogue._reflect("qiqi", "player"))
+        await entered.wait()
+        env.store.bump_turn("qiqi", "player", 7)
+        release.set()
+        await task
+        assert env.store.relation("qiqi", "player")["importance_acc"] == 7
+    asyncio.run(run())
+
+
+def test_llm_reserves_slot_for_foreground_under_background_load():
+    async def run():
+        client = LLMClient(mock=True)
+        release = asyncio.Event()
+        full = asyncio.Event()
+        active = 0
+        async def background_call():
+            nonlocal active
+            async with client._slot(False):
+                active += 1
+                if active == settings.LLM_MAX_CONCURRENCY - 1:
+                    full.set()
+                await release.wait()
+        tasks = [asyncio.create_task(background_call()) for _ in range(settings.LLM_MAX_CONCURRENCY)]
+        await asyncio.wait_for(full.wait(), timeout=1)
+        async def foreground_call():
+            async with client._slot(True):
+                return "entered"
+        assert await asyncio.wait_for(foreground_call(), timeout=0.1) == "entered"
+        release.set()
+        await asyncio.gather(*tasks)
+    asyncio.run(run())
+
+
+def test_non_thinking_params_are_only_used_when_enabled():
+    client = LLMClient(mock=True)
+    params = client._completion_params(0.3, 600, 0.95, True)
+    assert params["extra_body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    ordinary = client._completion_params(0.8, 400, 0.95, False)
+    assert "chat_template_kwargs" not in ordinary["extra_body"]
+
+
 def test_registry_loads_three_npcs(env):
     npcs = env.registry.all()
     assert [n["name"] for n in npcs] == ["柒柒", "泽不易", "谦谦"]

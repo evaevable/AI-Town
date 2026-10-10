@@ -6,6 +6,8 @@
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+import time
 import json
 import logging
 import random
@@ -46,6 +48,8 @@ class LLMClient:
     def __init__(self, mock: Optional[bool] = None):
         self.mock = settings.LLM_MOCK if mock is None else mock
         self._sem = asyncio.Semaphore(settings.LLM_MAX_CONCURRENCY)
+        # 环境独白/反思等最多占 N-1 个槽，给玩家聊天和判分留一个槽。
+        self._background_slots = asyncio.Semaphore(max(1, settings.LLM_MAX_CONCURRENCY - 1))
         self._client = None
         self.calls = 0  # 调用计数（测试、统计用）
         if not self.mock:
@@ -72,6 +76,26 @@ class LLMClient:
             extra_body={"top_k": 20},
         )
 
+    def _completion_params(self, temperature: float, max_tokens: int, top_p: float,
+                           disable_thinking: bool) -> Dict[str, Any]:
+        params = self._params(temperature, max_tokens, top_p)
+        if disable_thinking:
+            params["extra_body"]["chat_template_kwargs"] = {"enable_thinking": False}
+        return params
+
+    @asynccontextmanager
+    async def _slot(self, foreground: bool):
+        started = time.perf_counter()
+        if foreground:
+            async with self._sem:
+                log.info("LLM queue foreground=true wait_ms=%d", (time.perf_counter() - started) * 1000)
+                yield
+        else:
+            async with self._background_slots:
+                async with self._sem:
+                    log.info("LLM queue foreground=false wait_ms=%d", (time.perf_counter() - started) * 1000)
+                    yield
+
     async def complete(
         self,
         messages: List[Dict[str, str]],
@@ -79,6 +103,8 @@ class LLMClient:
         max_tokens: int = 400,
         top_p: float = 0.95,
         mock_text: Optional[str] = None,
+        foreground: bool = False,
+        disable_thinking: bool = False,
     ) -> str:
         self.calls += 1
         if self.mock:
@@ -86,17 +112,26 @@ class LLMClient:
             return mock_text if mock_text is not None else _mock_reply(messages)
         # 推理型模型（如 echo-2.2.2）会先花掉一批 token 做思考，max_tokens 太小会导致正文为空
         max_tokens = max(512, max_tokens)
-        async with self._sem:
+        started = time.perf_counter()
+        async with self._slot(foreground):
             resp = await self._client.chat.completions.create(
-                messages=messages, **self._params(temperature, max_tokens, top_p)
+                messages=messages, **self._completion_params(temperature, max_tokens, top_p, disable_thinking)
             )
         text = clean_text(resp.choices[0].message.content or "")
         if not text:  # 兜底重试一次，给足预算
-            async with self._sem:
+            async with self._slot(foreground):
                 resp = await self._client.chat.completions.create(
-                    messages=messages, **self._params(temperature, 1024, top_p)
+                    messages=messages, **self._completion_params(temperature, 1024, top_p, disable_thinking)
                 )
             text = clean_text(resp.choices[0].message.content or "")
+        usage = resp.usage
+        message = resp.choices[0].message
+        reasoning = getattr(message, "reasoning", "") or ""
+        log.info("LLM complete foreground=%s total_ms=%d prompt_tokens=%s completion_tokens=%s "
+                 "reasoning_chars=%d finish=%s content_chars=%d", foreground,
+                 (time.perf_counter() - started) * 1000,
+                 usage.prompt_tokens if usage else None, usage.completion_tokens if usage else None,
+                 len(reasoning), resp.choices[0].finish_reason, len(text))
         return text
 
     async def stream(
@@ -115,7 +150,7 @@ class LLMClient:
                 await asyncio.sleep(0.01)
                 yield text[i:i + 3]
             return
-        async with self._sem:
+        async with self._slot(True):
             stream = await self._client.chat.completions.create(
                 messages=messages, stream=True, **self._params(temperature, max(400, max_tokens), top_p)
             )
@@ -150,13 +185,16 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 600,
         mock_value: Any = None,
+        foreground: bool = False,
+        disable_thinking: bool = False,
     ) -> Optional[Any]:
         if self.mock:
             self.calls += 1
             return mock_value
         for attempt in range(2):
             try:
-                text = await self.complete(messages, temperature=temperature, max_tokens=max_tokens)
+                text = await self.complete(messages, temperature=temperature, max_tokens=max_tokens,
+                                           foreground=foreground, disable_thinking=disable_thinking)
             except Exception as e:  # 网络等错误
                 log.warning("LLM JSON 调用失败: %s", e)
                 return None
