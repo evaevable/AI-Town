@@ -119,13 +119,16 @@ func update_animation(direction: Vector2) -> void:
 			animated_sprite.play("idle")
 
 func _input(event: InputEvent) -> void:
+	# 对话中 E/Enter 属于文本输入，不再把输入英文当成重新打开对话。
+	if is_interacting:
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_E or event.keycode == KEY_ENTER:
 			if nearby_npc != null:
 				interact_with_npc()
 
 func interact_with_npc() -> void:
-	if nearby_npc == null:
+	if is_interacting or not is_instance_valid(nearby_npc):
 		return
 	if interact_sound:
 		interact_sound.play()

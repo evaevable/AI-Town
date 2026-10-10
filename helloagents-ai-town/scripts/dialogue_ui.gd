@@ -12,6 +12,9 @@ const FONT_SMALL := 17
 const FONT_INPUT := 20
 const INK := Color(0.13, 0.13, 0.12)      # 浅底上的正文色
 const MUTED := Color(0.42, 0.40, 0.36)
+# macOS 的输入法可能先清空合成文本，再把同一次确认回车交给 LineEdit。
+# 只保护合成结束后的短窗口，不给普通英文输入增加发送延迟。
+const IME_COMMIT_GUARD_MS := 150
 
 var current: Node = null
 var inventory: Array = []
@@ -31,8 +34,55 @@ var close_btn: Button
 var gift_menu: PopupMenu
 var waiting := false
 var _pending := false   # 已发出请求、正在等这一轮回复（防止并发串台）
+var _ime_composing := false
+var _ime_commit_at_ms := -1
+var _ime_commit_frame := -1
+
+func _notification(what: int) -> void:
+	if what == MainLoop.NOTIFICATION_OS_IME_UPDATE and is_instance_valid(input) and input.has_focus():
+		# 用系统通知而不只用每帧轮询，捕捉同一帧内开始并结束的合成。
+		_track_ime_state(_system_ime_has_text())
+
+func _process(_delta: float) -> void:
+	if visible and is_instance_valid(input) and input.has_focus():
+		_track_ime_state(input.has_ime_text() or _system_ime_has_text())
+
+func _system_ime_has_text() -> bool:
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_IME):
+		return false
+	return not DisplayServer.ime_get_text().is_empty()
+
+func _track_ime_state(composing: bool) -> void:
+	if _ime_composing and not composing:
+		_ime_commit_at_ms = Time.get_ticks_msec()
+		_ime_commit_frame = Engine.get_process_frames()
+	_ime_composing = composing
+
+func _ime_blocks_enter() -> bool:
+	if _ime_composing or input.has_ime_text() or _system_ime_has_text():
+		return true
+	if _ime_commit_at_ms < 0:
+		return false
+	return Engine.get_process_frames() == _ime_commit_frame or Time.get_ticks_msec() - _ime_commit_at_ms <= IME_COMMIT_GUARD_MS
+
+func _reset_ime_guard() -> void:
+	_ime_composing = false
+	_ime_commit_at_ms = -1
+	_ime_commit_frame = -1
+
+func _on_text_submitted(_text: String) -> void:
+	if not visible or current == null or waiting or _ime_blocks_enter():
+		return
+	# 原生输入法上屏可能和回车都排在这一帧，等队列处理完再发送。
+	_on_text_submitted_deferred.call_deferred()
+
+func _on_text_submitted_deferred() -> void:
+	if not visible or current == null or waiting or _ime_blocks_enter():
+		return
+	_send()
 
 func _ready() -> void:
+	layer = 10  # 位于 HUD(5) 之上，聊天时压暗层不会被 HUD 穿透。
 	add_to_group("dialogue_system")
 	visible = false
 	_build_ui()
@@ -157,7 +207,8 @@ func _build_ui() -> void:
 	row.add_theme_constant_override("separation", 10)
 	col.add_child(row)
 	input = LineEdit.new()
-	input.placeholder_text = "说点什么…（回车发送）"
+	input.placeholder_text = "说点什么…（输入法回车选词，确认后再回车发送）"
+	input.keep_editing_on_text_submit = true
 	input.add_theme_font_size_override("font_size", FONT_INPUT)
 	input.add_theme_color_override("font_color", INK)
 	input.add_theme_color_override("font_placeholder_color", Color(0.55, 0.53, 0.5))
@@ -179,7 +230,7 @@ func _build_ui() -> void:
 	add_child(gift_menu)
 
 	send_btn.pressed.connect(_send)
-	input.text_submitted.connect(func(_t): _send())
+	input.text_submitted.connect(_on_text_submitted)
 	gift_btn.pressed.connect(_open_gift_menu)
 	gift_menu.id_pressed.connect(_on_gift_id)
 	close_btn.pressed.connect(close_dialogue)
@@ -188,6 +239,9 @@ func _input(event: InputEvent) -> void:
 	if not visible:
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
+		if input.has_focus() and _ime_blocks_enter():
+			# Enter/ESC/字母都交给原生输入法处理，不接管选词或取消合成。
+			return
 		if event.keycode == KEY_ESCAPE:
 			close_dialogue()
 			get_viewport().set_input_as_handled()
@@ -196,6 +250,9 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 
 func start_dialogue(npc) -> void:
+	if visible:
+		return
+	_reset_ime_guard()
 	if typeof(npc) == TYPE_STRING:
 		npc = _find_npc(str(npc))
 	if npc == null:
@@ -220,6 +277,7 @@ func close_dialogue() -> void:
 		current.set_interacting(false)
 	current = null
 	visible = false
+	_reset_ime_guard()
 	var player := get_tree().get_first_node_in_group("player")
 	if player and player.has_method("set_interacting"):
 		player.set_interacting(false)

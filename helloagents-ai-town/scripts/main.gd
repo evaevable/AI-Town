@@ -7,6 +7,10 @@ const NPC_SCENE := preload("res://scenes/npc.tscn")
 @onready var dialogue: Node = $DialogueUI
 
 var hud: Control
+var hud_layer: CanvasLayer
+var hud_left: VBoxContainer
+var hud_help: PanelContainer
+var hud_quests: PanelContainer
 var clock_label: Label
 var event_label: Label
 var toast_label: Label
@@ -32,6 +36,15 @@ func _ready() -> void:
 	Net.player_state.connect(_on_player_state)
 	Net.chat_end.connect(_on_chat_end_affinity)
 	Net.gift_result.connect(_on_gift_affinity)
+	if OS.get_environment("AITOWN_HUDTEST") != "":
+		var hud_test: Node = load("res://scripts/hud_regression.gd").new()
+		add_child.call_deferred(hud_test)
+		return
+	if OS.get_environment("AITOWN_INPUTTEST") != "":
+		# 测试替身只记录发送次数，不调用模型、不改好感度或记忆。
+		var input_test: Node = load("res://scripts/input_regression.gd").new()
+		add_child.call_deferred(input_test)
+		return
 	if not Net.is_online():
 		_toast("还没连上后端，请先在 backend 目录运行 python main.py")
 	_toast("用 WASD 走到 NPC 旁边，按 E 跟他说话")
@@ -53,20 +66,33 @@ func _process(delta: float) -> void:
 
 # ---------- HUD ----------
 func _build_hud() -> void:
+	# 地图和 NPC 在世界画布(0)，HUD 固定在屏幕画布(5)，对话框在更高一层(10)。
+	# 不能把 HUD 直接挂在 Node2D 下，否则 Camera2D 会把它当地图一起平移。
+	hud_layer = CanvasLayer.new()
+	hud_layer.name = "HUDLayer"
+	hud_layer.layer = 5
+	hud_layer.follow_viewport_enabled = false
+	add_child(hud_layer)
 	hud = Control.new()
 	hud.name = "HUD"
-	hud.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hud_layer.add_child(hud)
+	hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(hud)
+
+	hud_left = VBoxContainer.new()
+	hud_left.name = "LeftPanels"
+	hud_left.position = Vector2(16, 12)
+	hud_left.add_theme_constant_override("separation", 10)
+	hud.add_child(hud_left)
 
 	var box := PanelContainer.new()
-	box.position = Vector2(16, 12)
+	box.name = "ClockPanel"
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(1, 0.99, 0.96, 0.85)
 	st.set_corner_radius_all(10)
 	st.set_content_margin_all(10)
 	box.add_theme_stylebox_override("panel", st)
-	hud.add_child(box)
+	hud_left.add_child(box)
 	var col := VBoxContainer.new()
 	box.add_child(col)
 	clock_label = Label.new()
@@ -79,30 +105,34 @@ func _build_hud() -> void:
 	col.add_child(event_label)
 
 	var rbox := PanelContainer.new()
-	rbox.position = Vector2(16, 108)
+	rbox.name = "RelationsPanel"
 	var rst := StyleBoxFlat.new()
 	rst.bg_color = Color(1, 0.99, 0.96, 0.9)
 	rst.set_corner_radius_all(10)
 	rst.set_content_margin_all(10)
 	rbox.add_theme_stylebox_override("panel", rst)
-	hud.add_child(rbox)
+	hud_left.add_child(rbox)
 	relation_box = VBoxContainer.new()
 	relation_box.add_theme_constant_override("separation", 3)
 	rbox.add_child(relation_box)
 
 	var qbox := PanelContainer.new()
-	qbox.position = Vector2(16, 232)
+	qbox.name = "QuestsPanel"
+	hud_quests = qbox
+	qbox.visible = false
 	var st2 := StyleBoxFlat.new()
 	st2.bg_color = Color(1, 0.99, 0.96, 0.85)
 	st2.set_corner_radius_all(10)
 	st2.set_content_margin_all(10)
 	qbox.add_theme_stylebox_override("panel", st2)
-	hud.add_child(qbox)
+	hud_left.add_child(qbox)
 	quest_box = VBoxContainer.new()
 	qbox.add_child(quest_box)
 
 	# 右上角：操作说明（常驻）
 	var help := PanelContainer.new()
+	help.name = "HelpPanel"
+	hud_help = help
 	help.anchor_left = 1.0
 	help.anchor_right = 1.0
 	help.offset_left = -330
@@ -142,6 +172,21 @@ func _build_hud() -> void:
 	toast_label.add_theme_constant_override("outline_size", 8)
 	toast_label.visible = false
 	hud.add_child(toast_label)
+	# 面板和长文本根据视口可用宽度布局，而不是跟着地图坐标。
+	event_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	get_viewport().size_changed.connect(_layout_hud)
+	_layout_hud.call_deferred()
+
+func _layout_hud() -> void:
+	var screen: Vector2 = get_viewport_rect().size
+	hud_left.size.x = clampf(screen.x * 0.32, 300.0, 390.0)
+	hud_help.custom_minimum_size.x = minf(390.0, screen.x * 0.38)
+	hud_help.offset_left = -hud_help.custom_minimum_size.x - 16.0
+	hud_help.offset_right = -16.0
+	toast_label.anchor_top = 1.0
+	toast_label.anchor_bottom = 1.0
+	toast_label.offset_top = -100.0
+	toast_label.offset_bottom = -50.0
 
 func show_toast(text: String) -> void:
 	_toast(text)
@@ -156,7 +201,6 @@ func _toast(text: String) -> void:
 # ---------- 生成 NPC ----------
 func _on_welcome(list: Array, clock: Dictionary, event: String) -> void:
 	_spawn_npcs(list)
-	Net.fetch_player()
 	Net.fetch_player()
 	_on_clock(clock)
 	event_label.text = ("正在发生：" + event) if event != "" else ""
@@ -251,9 +295,10 @@ func _render_relations() -> void:
 	if relation_box == null:
 		return
 	for c in relation_box.get_children():
+		relation_box.remove_child(c)
 		c.queue_free()
 	var head := Label.new()
-	head.text = "关系"
+	head.text = "关系 · 好感度"
 	head.add_theme_font_size_override("font_size", 15)
 	head.add_theme_color_override("font_color", Color(0.3, 0.29, 0.27))
 	relation_box.add_child(head)
@@ -268,6 +313,14 @@ func _render_relations() -> void:
 		name_l.add_theme_color_override("font_color", Color(0.14, 0.14, 0.13))
 		row.add_child(name_l)
 		var bar := ProgressBar.new()
+		var track := StyleBoxFlat.new()
+		track.bg_color = Color(0.86, 0.85, 0.81)
+		track.set_corner_radius_all(6)
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = Color(0.25, 0.48, 0.72)
+		fill.set_corner_radius_all(6)
+		bar.add_theme_stylebox_override("background", track)
+		bar.add_theme_stylebox_override("fill", fill)
 		bar.max_value = 100
 		bar.value = float(info["affinity"])
 		bar.show_percentage = false
@@ -275,7 +328,7 @@ func _render_relations() -> void:
 		bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(bar)
 		var lv := Label.new()
-		lv.text = "%s %d" % [str(info["level"]), int(round(float(info["affinity"])))]
+		lv.text = "%s %d/100" % [str(info["level"]), int(round(float(info["affinity"])))]
 		lv.add_theme_font_size_override("font_size", 15)
 		lv.add_theme_color_override("font_color", Color(0.42, 0.40, 0.36))
 		row.add_child(lv)
@@ -283,7 +336,9 @@ func _render_relations() -> void:
 
 func _on_quests(list: Array) -> void:
 	for c in quest_box.get_children():
+		quest_box.remove_child(c)
 		c.queue_free()
+	hud_quests.visible = not list.is_empty()
 	if list.is_empty():
 		return
 	var head := Label.new()
@@ -294,6 +349,8 @@ func _on_quests(list: Array) -> void:
 	for q in list:
 		var l := Label.new()
 		l.text = "· " + str(q.get("content", ""))
+		l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		l.add_theme_color_override("font_color", Color(0.16, 0.16, 0.14))
 		l.add_theme_font_size_override("font_size", 15)
 		quest_box.add_child(l)
 
